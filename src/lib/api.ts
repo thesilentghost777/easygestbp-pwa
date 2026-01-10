@@ -94,27 +94,36 @@ async function apiRequest<T>(
   }
 }
 
+// Générer ou récupérer le client_id
+async function ensureClientId(): Promise<string> {
+  let clientId = await getConfig<string>('client_id');
+  if (!clientId) {
+    clientId = `client_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    await setConfig('client_id', clientId);
+  }
+  return clientId;
+}
+
 // Endpoints Authentification
 export const authApi = {
   async inscription(data: {
-    nom: string;
+    name: string;
     numero_telephone: string;
     role: string;
     code_pin: string;
     preferred_language?: string;
     code_pdg?: string;
   }): Promise<ApiResponse<AuthResponse>> {
-    const clientId = await getClientId();
+    const clientId = await ensureClientId();
     const response = await apiRequest<AuthResponse>('/auth/inscription', {
       method: 'POST',
       body: JSON.stringify({
-        nom: data.nom,
+        name: data.name,
         numero_telephone: data.numero_telephone,
         role: data.role,
         code_pin: data.code_pin,
         preferred_language: data.preferred_language || 'fr',
         code_pdg: data.code_pdg,
-        has_client_id: !!clientId,
         client_id: clientId,
         device_info: navigator.userAgent,
       }),
@@ -142,7 +151,7 @@ export const authApi = {
     numero_telephone: string;
     code_pin: string;
   }): Promise<ApiResponse<AuthResponse>> {
-    const clientId = await getClientId();
+    const clientId = await ensureClientId();
     const response = await apiRequest<AuthResponse>('/auth/connexion', {
       method: 'POST',
       body: JSON.stringify({
@@ -155,9 +164,13 @@ export const authApi = {
     // Stocker token et user si succès
     const token = response.data?.token || (response as any).token;
     const user = response.data?.user || (response as any).user;
+    const newClientId = response.data?.client_id || (response as any).client_id;
     
     if (response.success && token) {
       await setConfig('auth_token', token);
+    }
+    if (response.success && newClientId) {
+      await setConfig('client_id', newClientId);
     }
     if (response.success && user) {
       await setConfig('current_user', user);

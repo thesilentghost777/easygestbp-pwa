@@ -22,7 +22,7 @@ interface AuthContextType {
   isOnline: boolean;
   login: (phone: string, pin: string) => Promise<{ success: boolean; message: string }>;
   register: (data: {
-    nom: string;
+    name: string;
     numero_telephone: string;
     role: string;
     code_pin: string;
@@ -154,7 +154,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   const register = async (data: {
-    nom: string;
+    name: string;
     numero_telephone: string;
     role: string;
     code_pin: string;
@@ -165,7 +165,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     
     try {
       const response = await authApi.inscription({
-        nom: data.nom,
+        name: data.name,
         numero_telephone: data.numero_telephone,
         role: data.role,
         code_pin: data.code_pin,
