@@ -22,7 +22,7 @@ interface AuthContextType {
   isOnline: boolean;
   login: (phone: string, pin: string) => Promise<{ success: boolean; message: string }>;
   register: (data: {
-    name: string;
+    nom: string;
     numero_telephone: string;
     role: string;
     code_pin: string;
@@ -32,6 +32,19 @@ interface AuthContextType {
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
+
+// Normaliser l'utilisateur depuis la réponse API (gère nom/name)
+function normalizeUser(apiUser: any): User | null {
+  if (!apiUser) return null;
+  return {
+    id: apiUser.id,
+    name: apiUser.nom || apiUser.name,
+    numero_telephone: apiUser.numero_telephone,
+    role: apiUser.role,
+    actif: apiUser.actif ?? true,
+    preferred_language: apiUser.preferred_language || 'fr',
+  };
+}
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
@@ -69,10 +82,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         
         // Vérifier avec le serveur si en ligne
         if (isOnline) {
-          const response = await authApi.me();
-          if (response.success && response.data?.user) {
-            setUser(response.data.user as User);
-            await setConfig('current_user', response.data.user);
+          try {
+            const response = await authApi.me();
+            if (response.success && response.data?.user) {
+              const normalizedUser = normalizeUser(response.data.user);
+              if (normalizedUser) {
+                setUser(normalizedUser);
+                await setConfig('current_user', normalizedUser);
+              }
+            }
+          } catch (error) {
+            console.warn('Impossible de vérifier la session en ligne:', error);
           }
         }
       }
@@ -108,19 +128,33 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         code_pin: pin,
       });
       
-      if (response.success && response.data?.user) {
-        setUser(response.data.user as User);
-        return { success: true, message: 'Connexion réussie' };
+      // La réponse peut avoir user à différents niveaux
+      const apiUser = response.data?.user || (response as any).user;
+      const token = response.data?.token || (response as any).token;
+      
+      if (response.success && apiUser) {
+        const normalizedUser = normalizeUser(apiUser);
+        if (normalizedUser) {
+          // Sauvegarder dans IndexedDB
+          await setConfig('current_user', normalizedUser);
+          if (token) {
+            await setConfig('auth_token', token);
+          }
+          // Mettre à jour l'état
+          setUser(normalizedUser);
+          return { success: true, message: 'Connexion réussie' };
+        }
       }
       
       return { success: false, message: response.message || 'Identifiants incorrects' };
     } catch (error: any) {
+      console.error('Login error:', error);
       return { success: false, message: error.message || 'Erreur de connexion' };
     }
   };
 
   const register = async (data: {
-    name: string;
+    nom: string;
     numero_telephone: string;
     role: string;
     code_pin: string;
@@ -130,15 +164,34 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
     
     try {
-      const response = await authApi.inscription(data);
+      const response = await authApi.inscription({
+        nom: data.nom,
+        numero_telephone: data.numero_telephone,
+        role: data.role,
+        code_pin: data.code_pin,
+      });
       
-      if (response.success && response.data?.user) {
-        setUser(response.data.user as User);
-        return { success: true, message: 'Inscription réussie' };
+      // La réponse peut avoir user à différents niveaux
+      const apiUser = response.data?.user || (response as any).user;
+      const token = response.data?.token || (response as any).token;
+      
+      if (response.success && apiUser) {
+        const normalizedUser = normalizeUser(apiUser);
+        if (normalizedUser) {
+          // Sauvegarder dans IndexedDB
+          await setConfig('current_user', normalizedUser);
+          if (token) {
+            await setConfig('auth_token', token);
+          }
+          // Mettre à jour l'état
+          setUser(normalizedUser);
+          return { success: true, message: 'Inscription réussie' };
+        }
       }
       
       return { success: false, message: response.message || 'Erreur lors de l\'inscription' };
     } catch (error: any) {
+      console.error('Register error:', error);
       return { success: false, message: error.message || 'Erreur de connexion' };
     }
   };

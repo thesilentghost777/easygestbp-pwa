@@ -97,28 +97,42 @@ async function apiRequest<T>(
 // Endpoints Authentification
 export const authApi = {
   async inscription(data: {
-    name: string;
+    nom: string;
     numero_telephone: string;
     role: string;
     code_pin: string;
     preferred_language?: string;
-    has_client_id?: boolean;
-    client_id?: string;
-    device_info?: string;
+    code_pdg?: string;
   }): Promise<ApiResponse<AuthResponse>> {
+    const clientId = await getClientId();
     const response = await apiRequest<AuthResponse>('/auth/inscription', {
       method: 'POST',
       body: JSON.stringify({
-        ...data,
-        has_client_id: false,
+        nom: data.nom,
+        numero_telephone: data.numero_telephone,
+        role: data.role,
+        code_pin: data.code_pin,
+        preferred_language: data.preferred_language || 'fr',
+        code_pdg: data.code_pdg,
+        has_client_id: !!clientId,
+        client_id: clientId,
         device_info: navigator.userAgent,
       }),
     });
     
-    if (response.success && response.data) {
-      await setConfig('auth_token', response.data.token);
-      await setConfig('client_id', response.data.client_id);
-      await setConfig('current_user', response.data.user);
+    // Stocker token et user si succès
+    const token = response.data?.token || (response as any).token;
+    const user = response.data?.user || (response as any).user;
+    const newClientId = response.data?.client_id || (response as any).client_id;
+    
+    if (response.success && token) {
+      await setConfig('auth_token', token);
+    }
+    if (response.success && newClientId) {
+      await setConfig('client_id', newClientId);
+    }
+    if (response.success && user) {
+      await setConfig('current_user', user);
     }
     
     return response;
@@ -128,14 +142,25 @@ export const authApi = {
     numero_telephone: string;
     code_pin: string;
   }): Promise<ApiResponse<AuthResponse>> {
+    const clientId = await getClientId();
     const response = await apiRequest<AuthResponse>('/auth/connexion', {
       method: 'POST',
-      body: JSON.stringify(data),
+      body: JSON.stringify({
+        ...data,
+        client_id: clientId,
+        device_info: navigator.userAgent,
+      }),
     });
     
-    if (response.success && response.data) {
-      await setConfig('auth_token', response.data.token);
-      await setConfig('current_user', response.data.user);
+    // Stocker token et user si succès
+    const token = response.data?.token || (response as any).token;
+    const user = response.data?.user || (response as any).user;
+    
+    if (response.success && token) {
+      await setConfig('auth_token', token);
+    }
+    if (response.success && user) {
+      await setConfig('current_user', user);
     }
     
     return response;
@@ -276,12 +301,11 @@ export const inventairesApi = {
 // Endpoints Sessions de vente
 export const sessionsApi = {
   async ouvrir(data: {
-    categorie: 'boulangerie' | 'patisserie';
     fond_vente: number;
     orange_money_initial?: number;
     mtn_money_initial?: number;
   }): Promise<ApiResponse<any>> {
-    return apiRequest('/sessions-vente/ouvrir', {
+    return apiRequest('/sessions-vente/creer', {
       method: 'POST',
       body: JSON.stringify(data),
     });
@@ -289,6 +313,26 @@ export const sessionsApi = {
   
   async getActive(): Promise<ApiResponse<any>> {
     return apiRequest('/sessions-vente/active');
+  },
+  
+  async getMesSessions(): Promise<ApiResponse<any[]>> {
+    return apiRequest('/sessions-vente/mes-sessions');
+  },
+  
+  async getToutes(): Promise<ApiResponse<any[]>> {
+    return apiRequest('/sessions-vente/toutes');
+  },
+  
+  async fermer(sessionId: number, data: {
+    montant_verse: number;
+    orange_money_final: number;
+    mtn_money_final: number;
+    ventes_totales: number;
+  }): Promise<ApiResponse<any>> {
+    return apiRequest(`/sessions-vente/${sessionId}/fermer`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
   },
   
   async getHistorique(params?: {
