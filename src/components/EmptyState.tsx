@@ -3,11 +3,11 @@
  */
 
 import React from 'react';
-import { Package, FileX, Inbox } from 'lucide-react';
+import { Package, FileX, Inbox, BarChart3, Users } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 interface EmptyStateProps {
-  icon?: 'package' | 'file' | 'inbox';
+  icon?: 'package' | 'file' | 'inbox' | 'chart' | 'users';
   title: string;
   description?: string;
   action?: React.ReactNode;
@@ -25,6 +25,8 @@ export function EmptyState({
     package: Package,
     file: FileX,
     inbox: Inbox,
+    chart: BarChart3,
+    users: Users,
   };
 
   const Icon = icons[icon];

@@ -18,6 +18,7 @@ import RegisterPage from "./pages/Register";
 import Dashboard from "./pages/Dashboard";
 import PointeurDashboard from "./pages/PointeurDashboard";
 import VendeurDashboard from "./pages/VendeurDashboard";
+import PDGDashboard from "./pages/PDGDashboard";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -111,6 +112,12 @@ const App = () => (
                 <Route path="/vendeur" element={
                   <ProtectedRoute allowedRoles={['vendeur_boulangerie', 'vendeur_patisserie']}>
                     <VendeurDashboard />
+                  </ProtectedRoute>
+                } />
+                
+                <Route path="/pdg" element={
+                  <ProtectedRoute allowedRoles={['pdg']}>
+                    <PDGDashboard />
                   </ProtectedRoute>
                 } />
                 
