@@ -17,6 +17,13 @@ import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
 import { 
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from '@/components/ui/dialog';
+import { 
   Package, 
   Undo2, 
   Check, 
@@ -24,15 +31,24 @@ import {
   Clock,
   User,
   Loader2,
-  AlertTriangle
+  AlertTriangle,
+  Edit2,
+  X,
+  Trash2
 } from 'lucide-react';
-import { getDB, generateLocalId, type Produit, type User as DBUser, type ReceptionPointeur } from '@/lib/db';
+import { getDB, generateLocalId, type Produit, type User as DBUser, type ReceptionPointeur, type RetourProduit } from '@/lib/db';
 import { autoSyncOnDashboard } from '@/lib/sync';
 import { toast } from 'sonner';
 import { format } from 'date-fns';
 import { fr } from 'date-fns/locale';
 
 type TabType = 'reception' | 'retour' | 'mes-receptions' | 'mes-retours';
+
+interface EditModalState {
+  isOpen: boolean;
+  type: 'reception' | 'retour' | null;
+  item: ReceptionPointeur | RetourProduit | null;
+}
 
 export default function PointeurDashboard() {
   const navigate = useNavigate();
@@ -46,16 +62,41 @@ export default function PointeurDashboard() {
   // Données
   const [produits, setProduits] = useState<Produit[]>([]);
   const [producteurs, setProducteurs] = useState<DBUser[]>([]);
+  const [vendeurs, setVendeurs] = useState<DBUser[]>([]);
   const [vendeurActif, setVendeurActif] = useState<{ boulangerie?: DBUser; patisserie?: DBUser }>({});
   const [receptions, setReceptions] = useState<ReceptionPointeur[]>([]);
+  const [retours, setRetours] = useState<RetourProduit[]>([]);
   
   // Formulaire réception
   const [receptionForm, setReceptionForm] = useState({
-    producteur_id: 1, // Par défaut producteur ID 1
+    producteur_id: 1,
     produit_id: null as number | null,
     quantite: 0,
     notes: '',
   });
+  
+  // Formulaire retour
+  const [retourForm, setRetourForm] = useState({
+    vendeur_id: null as number | null,
+    produit_id: null as number | null,
+    quantite: 0,
+    raison: 'perime' as 'perime' | 'abime' | 'autre',
+    description: '',
+  });
+  
+  // Modal d'édition
+  const [editModal, setEditModal] = useState<EditModalState>({
+    isOpen: false,
+    type: null,
+    item: null,
+  });
+  const [editForm, setEditForm] = useState({
+    quantite: 0,
+    notes: '',
+    raison: 'perime' as 'perime' | 'abime' | 'autre',
+    description: '',
+  });
+  
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   // Charger les données au montage
@@ -72,9 +113,12 @@ export default function PointeurDashboard() {
         const allProduits = await db.getAll('produits');
         setProduits(allProduits.filter(p => p.actif));
         
-        // Charger producteurs
+        // Charger utilisateurs
         const allUsers = await db.getAll('users');
         setProducteurs(allUsers.filter(u => u.role === 'producteur' && u.actif));
+        setVendeurs(allUsers.filter(u => 
+          (u.role === 'vendeur_boulangerie' || u.role === 'vendeur_patisserie') && u.actif
+        ));
         
         // Charger vendeurs actifs
         const vendeursActifs = await db.getAll('vendeurs_actifs');
@@ -90,11 +134,16 @@ export default function PointeurDashboard() {
           if (vp) setVendeurActif(prev => ({ ...prev, patisserie: vp }));
         }
         
-        // Charger mes réceptions
+        // Charger mes réceptions et retours
         if (user) {
           const allReceptions = await db.getAllFromIndex('receptions_pointeur', 'by-pointeur', user.id);
           setReceptions(allReceptions.sort((a, b) => 
             new Date(b.date_reception).getTime() - new Date(a.date_reception).getTime()
+          ));
+          
+          const allRetours = await db.getAllFromIndex('retours_produits', 'by-pointeur', user.id);
+          setRetours(allRetours.sort((a, b) => 
+            new Date(b.date_retour).getTime() - new Date(a.date_retour).getTime()
           ));
         }
         
@@ -179,8 +228,156 @@ export default function PointeurDashboard() {
     }
   };
 
+  // Soumettre un retour
+  const handleSubmitRetour = async () => {
+    if (!retourForm.vendeur_id || !retourForm.produit_id || retourForm.quantite <= 0 || !user) {
+      toast.error('Veuillez remplir tous les champs obligatoires');
+      return;
+    }
+    
+    setIsSubmitting(true);
+    
+    try {
+      const db = await getDB();
+      const now = new Date().toISOString();
+      
+      const retour: RetourProduit = {
+        local_id: generateLocalId(),
+        pointeur_id: user.id,
+        vendeur_id: retourForm.vendeur_id,
+        produit_id: retourForm.produit_id,
+        quantite: retourForm.quantite,
+        raison: retourForm.raison,
+        description: retourForm.description || undefined,
+        verrou: false,
+        date_retour: now,
+        sync_status: 'pending',
+        created_at: now,
+        updated_at: now,
+      };
+      
+      await db.add('retours_produits', retour);
+      
+      // Rafraîchir la liste
+      const allRetours = await db.getAllFromIndex('retours_produits', 'by-pointeur', user.id);
+      setRetours(allRetours.sort((a, b) => 
+        new Date(b.date_retour).getTime() - new Date(a.date_retour).getTime()
+      ));
+      
+      // Reset formulaire
+      setRetourForm({
+        vendeur_id: null,
+        produit_id: null,
+        quantite: 0,
+        raison: 'perime',
+        description: '',
+      });
+      
+      const vendeur = vendeurs.find(v => v.id === retourForm.vendeur_id);
+      toast.success('Retour enregistré !', {
+        description: `${retourForm.quantite} unité(s) retournées par ${vendeur?.name}`,
+      });
+      
+    } catch (error) {
+      console.error('Erreur retour:', error);
+      toast.error('Erreur lors de l\'enregistrement');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  // Ouvrir le modal d'édition
+  const openEditModal = (type: 'reception' | 'retour', item: ReceptionPointeur | RetourProduit) => {
+    if (item.verrou) {
+      toast.error('Cet enregistrement est verrouillé par le PDG');
+      return;
+    }
+    
+    setEditModal({ isOpen: true, type, item });
+    
+    if (type === 'reception') {
+      const rec = item as ReceptionPointeur;
+      setEditForm({
+        quantite: rec.quantite,
+        notes: rec.notes || '',
+        raison: 'perime',
+        description: '',
+      });
+    } else {
+      const ret = item as RetourProduit;
+      setEditForm({
+        quantite: ret.quantite,
+        notes: '',
+        raison: ret.raison,
+        description: ret.description || '',
+      });
+    }
+  };
+
+  // Sauvegarder les modifications
+  const handleSaveEdit = async () => {
+    if (!editModal.item || !user) return;
+    
+    setIsSubmitting(true);
+    
+    try {
+      const db = await getDB();
+      const now = new Date().toISOString();
+      
+      if (editModal.type === 'reception') {
+        const rec = editModal.item as ReceptionPointeur;
+        const updated: ReceptionPointeur = {
+          ...rec,
+          quantite: editForm.quantite,
+          notes: editForm.notes || undefined,
+          sync_status: 'pending',
+          updated_at: now,
+        };
+        await db.put('receptions_pointeur', updated);
+        
+        // Rafraîchir
+        const allReceptions = await db.getAllFromIndex('receptions_pointeur', 'by-pointeur', user.id);
+        setReceptions(allReceptions.sort((a, b) => 
+          new Date(b.date_reception).getTime() - new Date(a.date_reception).getTime()
+        ));
+      } else {
+        const ret = editModal.item as RetourProduit;
+        const updated: RetourProduit = {
+          ...ret,
+          quantite: editForm.quantite,
+          raison: editForm.raison,
+          description: editForm.description || undefined,
+          sync_status: 'pending',
+          updated_at: now,
+        };
+        await db.put('retours_produits', updated);
+        
+        // Rafraîchir
+        const allRetours = await db.getAllFromIndex('retours_produits', 'by-pointeur', user.id);
+        setRetours(allRetours.sort((a, b) => 
+          new Date(b.date_retour).getTime() - new Date(a.date_retour).getTime()
+        ));
+      }
+      
+      setEditModal({ isOpen: false, type: null, item: null });
+      toast.success('Modification enregistrée !');
+      
+    } catch (error) {
+      console.error('Erreur modification:', error);
+      toast.error('Erreur lors de la modification');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
   const selectedProduit = produits.find(p => p.id === receptionForm.produit_id);
   const vendeurAssigne = getVendeurAssigne(receptionForm.produit_id);
+  
+  const raisonLabels = {
+    perime: '🕐 Périmé',
+    abime: '💔 Abîmé',
+    autre: '📝 Autre',
+  };
 
   const tabs = [
     { id: 'reception' as const, icon: Package, label: 'Réception' },
@@ -329,9 +526,99 @@ export default function PointeurDashboard() {
                   <h2 className="font-display text-xl font-semibold mb-6">
                     Enregistrer un retour
                   </h2>
-                  <p className="text-muted-foreground text-center py-8">
-                    Fonctionnalité retour à venir...
-                  </p>
+                  
+                  {/* Vendeur */}
+                  <div className="space-y-2 mb-4">
+                    <Label>Vendeur *</Label>
+                    <SearchableSelect
+                      options={vendeurs.map(v => ({
+                        value: v.id,
+                        label: v.name,
+                        description: `${v.role === 'vendeur_boulangerie' ? 'Boulangerie' : 'Pâtisserie'} - ${v.numero_telephone}`,
+                      }))}
+                      value={retourForm.vendeur_id}
+                      onChange={(v) => setRetourForm({ ...retourForm, vendeur_id: v as number })}
+                      placeholder="Sélectionner un vendeur..."
+                    />
+                  </div>
+                  
+                  {/* Produit */}
+                  <div className="space-y-2 mb-4">
+                    <Label>Produit *</Label>
+                    <SearchableSelect
+                      options={produits.map(p => ({
+                        value: p.id,
+                        label: p.nom,
+                        description: `${p.prix} XAF - ${p.categorie}`,
+                      }))}
+                      value={retourForm.produit_id}
+                      onChange={(v) => setRetourForm({ ...retourForm, produit_id: v as number })}
+                      placeholder="Rechercher un produit..."
+                    />
+                  </div>
+                  
+                  {/* Quantité */}
+                  <div className="space-y-2 mb-4">
+                    <Label>Quantité *</Label>
+                    <NumericInput
+                      value={retourForm.quantite}
+                      onChange={(v) => setRetourForm({ ...retourForm, quantite: v })}
+                      min={0}
+                      max={9999}
+                      size="lg"
+                    />
+                  </div>
+                  
+                  {/* Raison */}
+                  <div className="space-y-2 mb-4">
+                    <Label>Raison du retour *</Label>
+                    <div className="grid grid-cols-3 gap-2">
+                      {(['perime', 'abime', 'autre'] as const).map((raison) => (
+                        <button
+                          key={raison}
+                          type="button"
+                          onClick={() => setRetourForm({ ...retourForm, raison })}
+                          className={`p-3 rounded-lg border-2 text-center transition-all ${
+                            retourForm.raison === raison
+                              ? 'border-primary bg-primary/5'
+                              : 'border-border hover:border-primary/50'
+                          }`}
+                        >
+                          <span className="text-sm font-medium">{raisonLabels[raison]}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  
+                  {/* Description */}
+                  <div className="space-y-2 mb-6">
+                    <Label>Description (optionnel)</Label>
+                    <Textarea
+                      value={retourForm.description}
+                      onChange={(e) => setRetourForm({ ...retourForm, description: e.target.value })}
+                      placeholder="Détails supplémentaires..."
+                      className="resize-none"
+                      rows={2}
+                    />
+                  </div>
+                  
+                  <Button
+                    onClick={handleSubmitRetour}
+                    disabled={isSubmitting || !retourForm.vendeur_id || !retourForm.produit_id || retourForm.quantite <= 0}
+                    className="btn-golden w-full"
+                  >
+                    {isSubmitting ? (
+                      <>
+                        <Loader2 className="w-5 h-5 animate-spin" />
+                        <span>Enregistrement...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Undo2 className="w-5 h-5" />
+                        <span>Enregistrer le retour</span>
+                      </>
+                    )}
+                  </Button>
                 </div>
               </div>
             )}
@@ -359,7 +646,11 @@ export default function PointeurDashboard() {
                     {receptions.map((rec) => {
                       const produit = produits.find(p => p.id === rec.produit_id);
                       return (
-                        <div key={rec.id || rec.local_id} className="card-premium p-4">
+                        <div 
+                          key={rec.id || rec.local_id} 
+                          className="card-premium p-4 cursor-pointer hover:ring-2 hover:ring-primary/20 transition-all"
+                          onClick={() => openEditModal('reception', rec)}
+                        >
                           <div className="flex items-start justify-between gap-3">
                             <div className="flex-1 min-w-0">
                               <div className="flex items-center gap-2 mb-1">
@@ -381,8 +672,10 @@ export default function PointeurDashboard() {
                             </div>
                             <div className="flex flex-col items-end gap-1">
                               <SyncBadge status={rec.sync_status} />
-                              {rec.verrou && (
+                              {rec.verrou ? (
                                 <span className="text-xs text-muted-foreground">🔒 Verrouillé</span>
+                              ) : (
+                                <Edit2 className="w-4 h-4 text-muted-foreground" />
                               )}
                             </div>
                           </div>
@@ -397,19 +690,167 @@ export default function PointeurDashboard() {
             {/* Tab Mes Retours */}
             {activeTab === 'mes-retours' && (
               <div className="space-y-4 animate-fade-in">
-                <h2 className="font-display text-xl font-semibold">
-                  Mes Retours
-                </h2>
-                <EmptyState
-                  icon="inbox"
-                  title="Aucun retour"
-                  description="Vos retours apparaîtront ici"
-                />
+                <div className="flex items-center justify-between">
+                  <h2 className="font-display text-xl font-semibold">
+                    Mes Retours
+                  </h2>
+                  <span className="text-sm text-muted-foreground">
+                    {retours.length} retour(s)
+                  </span>
+                </div>
+                
+                {retours.length === 0 ? (
+                  <EmptyState
+                    icon="inbox"
+                    title="Aucun retour"
+                    description="Vos retours apparaîtront ici"
+                  />
+                ) : (
+                  <div className="space-y-3">
+                    {retours.map((ret) => {
+                      const produit = produits.find(p => p.id === ret.produit_id);
+                      const vendeur = vendeurs.find(v => v.id === ret.vendeur_id);
+                      return (
+                        <div 
+                          key={ret.id || ret.local_id} 
+                          className="card-premium p-4 cursor-pointer hover:ring-2 hover:ring-primary/20 transition-all"
+                          onClick={() => openEditModal('retour', ret)}
+                        >
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-2 mb-1">
+                                <span className="font-medium truncate">
+                                  {produit?.nom || `Produit #${ret.produit_id}`}
+                                </span>
+                                <span className="text-xs px-2 py-0.5 rounded-full bg-warning/10 text-warning">
+                                  {raisonLabels[ret.raison]}
+                                </span>
+                              </div>
+                              <div className="flex items-center gap-3 text-sm text-muted-foreground">
+                                <span className="font-semibold text-foreground">{ret.quantite} unités</span>
+                                <span className="flex items-center gap-1">
+                                  <User className="w-3 h-3" />
+                                  {vendeur?.name || 'Vendeur inconnu'}
+                                </span>
+                                <span className="flex items-center gap-1">
+                                  <Clock className="w-3 h-3" />
+                                  {format(new Date(ret.date_retour), 'HH:mm', { locale: fr })}
+                                </span>
+                              </div>
+                              {ret.description && (
+                                <p className="text-sm text-muted-foreground mt-1 truncate">{ret.description}</p>
+                              )}
+                            </div>
+                            <div className="flex flex-col items-end gap-1">
+                              <SyncBadge status={ret.sync_status} />
+                              {ret.verrou ? (
+                                <span className="text-xs text-muted-foreground">🔒 Verrouillé</span>
+                              ) : (
+                                <Edit2 className="w-4 h-4 text-muted-foreground" />
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
             )}
           </>
         )}
       </main>
+
+      {/* Modal d'édition */}
+      <Dialog open={editModal.isOpen} onOpenChange={(open) => !open && setEditModal({ isOpen: false, type: null, item: null })}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>
+              {editModal.type === 'reception' ? 'Modifier la réception' : 'Modifier le retour'}
+            </DialogTitle>
+          </DialogHeader>
+          
+          <div className="space-y-4 py-4">
+            {/* Quantité */}
+            <div className="space-y-2">
+              <Label>Quantité</Label>
+              <NumericInput
+                value={editForm.quantite}
+                onChange={(v) => setEditForm({ ...editForm, quantite: v })}
+                min={0}
+                max={9999}
+                size="lg"
+              />
+            </div>
+            
+            {editModal.type === 'reception' ? (
+              <div className="space-y-2">
+                <Label>Notes</Label>
+                <Textarea
+                  value={editForm.notes}
+                  onChange={(e) => setEditForm({ ...editForm, notes: e.target.value })}
+                  placeholder="Ajouter une note..."
+                  className="resize-none"
+                  rows={2}
+                />
+              </div>
+            ) : (
+              <>
+                <div className="space-y-2">
+                  <Label>Raison</Label>
+                  <div className="grid grid-cols-3 gap-2">
+                    {(['perime', 'abime', 'autre'] as const).map((raison) => (
+                      <button
+                        key={raison}
+                        type="button"
+                        onClick={() => setEditForm({ ...editForm, raison })}
+                        className={`p-2 rounded-lg border-2 text-center transition-all text-sm ${
+                          editForm.raison === raison
+                            ? 'border-primary bg-primary/5'
+                            : 'border-border hover:border-primary/50'
+                        }`}
+                      >
+                        {raisonLabels[raison]}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                
+                <div className="space-y-2">
+                  <Label>Description</Label>
+                  <Textarea
+                    value={editForm.description}
+                    onChange={(e) => setEditForm({ ...editForm, description: e.target.value })}
+                    placeholder="Détails supplémentaires..."
+                    className="resize-none"
+                    rows={2}
+                  />
+                </div>
+              </>
+            )}
+          </div>
+          
+          <DialogFooter className="gap-2">
+            <Button 
+              variant="outline" 
+              onClick={() => setEditModal({ isOpen: false, type: null, item: null })}
+            >
+              Annuler
+            </Button>
+            <Button
+              onClick={handleSaveEdit}
+              disabled={isSubmitting || editForm.quantite <= 0}
+              className="btn-golden"
+            >
+              {isSubmitting ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                'Enregistrer'
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Database Viewer Modal */}
       <DatabaseViewer isOpen={showDbViewer} onClose={() => setShowDbViewer(false)} />

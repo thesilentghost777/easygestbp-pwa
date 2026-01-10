@@ -76,7 +76,7 @@ export default function RegisterPage() {
     
     try {
       const result = await register({
-        nom: formData.name,
+        name: formData.name,
         numero_telephone: formData.numero_telephone,
         role: formData.role,
         code_pin: formData.code_pin,
