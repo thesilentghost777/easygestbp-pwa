@@ -1,8 +1,4 @@
-/**
- * EasyGest BP - Dashboard Pointeur
- */
-
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
 import { useSync } from '@/contexts/SyncContext';
@@ -16,17 +12,17 @@ import { DatabaseViewer } from '@/components/DatabaseViewer';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
-import { 
+import {
   Dialog,
   DialogContent,
   DialogHeader,
   DialogTitle,
   DialogFooter,
 } from '@/components/ui/dialog';
-import { 
-  Package, 
-  Undo2, 
-  Check, 
+import {
+  Package,
+  Undo2,
+  Check,
   ChevronRight,
   Clock,
   User,
@@ -41,24 +37,20 @@ import { autoSyncOnDashboard } from '@/lib/sync';
 import { toast } from 'sonner';
 import { format } from 'date-fns';
 import { fr } from 'date-fns/locale';
-
 type TabType = 'reception' | 'retour' | 'mes-receptions' | 'mes-retours';
-
 interface EditModalState {
   isOpen: boolean;
   type: 'reception' | 'retour' | null;
   item: ReceptionPointeur | RetourProduit | null;
 }
-
 export default function PointeurDashboard() {
   const navigate = useNavigate();
   const { user } = useAuth();
   const { sync, status } = useSync();
-  
   const [activeTab, setActiveTab] = useState<TabType>('reception');
   const [showDbViewer, setShowDbViewer] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
-  
+  const [isRefreshing, setIsRefreshing] = useState(false);
   // Données
   const [produits, setProduits] = useState<Produit[]>([]);
   const [producteurs, setProducteurs] = useState<DBUser[]>([]);
@@ -66,7 +58,6 @@ export default function PointeurDashboard() {
   const [vendeurActif, setVendeurActif] = useState<{ boulangerie?: DBUser; patisserie?: DBUser }>({});
   const [receptions, setReceptions] = useState<ReceptionPointeur[]>([]);
   const [retours, setRetours] = useState<RetourProduit[]>([]);
-  
   // Formulaire réception
   const [receptionForm, setReceptionForm] = useState({
     producteur_id: 1,
@@ -74,16 +65,13 @@ export default function PointeurDashboard() {
     quantite: 0,
     notes: '',
   });
-  
   // Formulaire retour
   const [retourForm, setRetourForm] = useState({
-    vendeur_id: null as number | null,
     produit_id: null as number | null,
     quantite: 0,
     raison: 'perime' as 'perime' | 'abime' | 'autre',
     description: '',
   });
-  
   // Modal d'édition
   const [editModal, setEditModal] = useState<EditModalState>({
     isOpen: false,
@@ -96,68 +84,104 @@ export default function PointeurDashboard() {
     raison: 'perime' as 'perime' | 'abime' | 'autre',
     description: '',
   });
-  
   const [isSubmitting, setIsSubmitting] = useState(false);
-
-  // Charger les données au montage
+  // Fonction pour charger les données depuis IndexedDB
+  const loadData = useCallback(async (showLoader = true) => {
+    if (showLoader) {
+      setIsLoading(true);
+    } else {
+      setIsRefreshing(true);
+    }
+    try {
+      console.log('🔄 [PointeurDashboard] Chargement des données...');
+      const db = await getDB();
+      // Charger produits actifs
+      const allProduits = await db.getAll('produits');
+      setProduits(allProduits.filter(p => p.actif));
+      // Charger utilisateurs
+      const allUsers = await db.getAll('users');
+      setProducteurs(allUsers.filter(u => u.role === 'producteur' && u.actif));
+      setVendeurs(allUsers.filter(u =>
+        (u.role === 'vendeur_boulangerie' || u.role === 'vendeur_patisserie') && u.actif
+      ));
+      // Charger vendeurs actifs
+      const vendeursActifs = await db.getAll('vendeurs_actifs');
+      const vendeurBoulangerie = vendeursActifs.find(v => v.categorie === 'boulangerie');
+      const vendeurPatisserie = vendeursActifs.find(v => v.categorie === 'patisserie');
+      const newVendeurActif: { boulangerie?: DBUser; patisserie?: DBUser } = {};
+      if (vendeurBoulangerie?.vendeur_id) {
+        const vb = allUsers.find(u => u.id === vendeurBoulangerie.vendeur_id);
+        if (vb) newVendeurActif.boulangerie = vb;
+      }
+      if (vendeurPatisserie?.vendeur_id) {
+        const vp = allUsers.find(u => u.id === vendeurPatisserie.vendeur_id);
+        if (vp) newVendeurActif.patisserie = vp;
+      }
+      setVendeurActif(newVendeurActif);
+      // Charger mes réceptions et retours
+      if (user) {
+        const allReceptions = await db.getAllFromIndex('receptions_pointeur', 'by-pointeur', user.id);
+        setReceptions(allReceptions.sort((a, b) =>
+          new Date(b.date_reception).getTime() - new Date(a.date_reception).getTime()
+        ));
+        const allRetours = await db.getAllFromIndex('retours_produits', 'by-pointeur', user.id);
+        setRetours(allRetours.sort((a, b) =>
+          new Date(b.date_retour).getTime() - new Date(a.date_retour).getTime()
+        ));
+      }
+   
+      console.log('✅ [PointeurDashboard] Données chargées avec succès');
+    } catch (error) {
+      console.error('❌ [PointeurDashboard] Erreur chargement données:', error);
+      toast.error('Erreur lors du chargement des données');
+    } finally {
+      if (showLoader) {
+        setIsLoading(false);
+      } else {
+        setIsRefreshing(false);
+      }
+    }
+  }, [user]);
+  // Charger les données au montage avec sync initiale
   useEffect(() => {
-    const loadData = async () => {
+    const initDashboard = async () => {
       setIsLoading(true);
       try {
-        // Sync auto
+        console.log('🚀 [PointeurDashboard] Initialisation du dashboard...');
         await autoSyncOnDashboard();
-        
-        const db = await getDB();
-        
-        // Charger produits actifs
-        const allProduits = await db.getAll('produits');
-        setProduits(allProduits.filter(p => p.actif));
-        
-        // Charger utilisateurs
-        const allUsers = await db.getAll('users');
-        setProducteurs(allUsers.filter(u => u.role === 'producteur' && u.actif));
-        setVendeurs(allUsers.filter(u => 
-          (u.role === 'vendeur_boulangerie' || u.role === 'vendeur_patisserie') && u.actif
-        ));
-        
-        // Charger vendeurs actifs
-        const vendeursActifs = await db.getAll('vendeurs_actifs');
-        const vendeurBoulangerie = vendeursActifs.find(v => v.categorie === 'boulangerie');
-        const vendeurPatisserie = vendeursActifs.find(v => v.categorie === 'patisserie');
-        
-        if (vendeurBoulangerie?.vendeur_id) {
-          const vb = allUsers.find(u => u.id === vendeurBoulangerie.vendeur_id);
-          if (vb) setVendeurActif(prev => ({ ...prev, boulangerie: vb }));
-        }
-        if (vendeurPatisserie?.vendeur_id) {
-          const vp = allUsers.find(u => u.id === vendeurPatisserie.vendeur_id);
-          if (vp) setVendeurActif(prev => ({ ...prev, patisserie: vp }));
-        }
-        
-        // Charger mes réceptions et retours
-        if (user) {
-          const allReceptions = await db.getAllFromIndex('receptions_pointeur', 'by-pointeur', user.id);
-          setReceptions(allReceptions.sort((a, b) => 
-            new Date(b.date_reception).getTime() - new Date(a.date_reception).getTime()
-          ));
-          
-          const allRetours = await db.getAllFromIndex('retours_produits', 'by-pointeur', user.id);
-          setRetours(allRetours.sort((a, b) => 
-            new Date(b.date_retour).getTime() - new Date(a.date_retour).getTime()
-          ));
-        }
-        
+        await loadData(true);
       } catch (error) {
-        console.error('Erreur chargement données:', error);
-        toast.error('Erreur lors du chargement des données');
-      } finally {
+        console.error('❌ [PointeurDashboard] Erreur initialisation:', error);
         setIsLoading(false);
       }
     };
-    
-    loadData();
-  }, [user]);
-
+    initDashboard();
+  }, [loadData]);
+  // Écouter les événements de synchronisation globale
+  useEffect(() => {
+    const handleSyncComplete = async () => {
+      console.log('✅ [PointeurDashboard] Synchronisation terminée, rechargement des données...');
+      await loadData(false); // Recharger sans loader pour une transition douce
+    };
+    const handleSyncStart = () => {
+      console.log('🔄 [PointeurDashboard] Synchronisation démarrée...');
+      setIsRefreshing(true);
+    };
+    const handleSyncError = () => {
+      console.log('❌ [PointeurDashboard] Erreur de synchronisation');
+      setIsRefreshing(false);
+    };
+    // S'abonner aux événements
+    window.addEventListener('global-sync-complete', handleSyncComplete);
+    window.addEventListener('global-sync-start', handleSyncStart);
+    window.addEventListener('global-sync-error', handleSyncError);
+    // Nettoyage
+    return () => {
+      window.removeEventListener('global-sync-complete', handleSyncComplete);
+      window.removeEventListener('global-sync-start', handleSyncStart);
+      window.removeEventListener('global-sync-error', handleSyncError);
+    };
+  }, [loadData]);
   // Trouver le vendeur assigné pour un produit
   const getVendeurAssigne = (produitId: number | null) => {
     if (!produitId) return null;
@@ -165,26 +189,21 @@ export default function PointeurDashboard() {
     if (!produit) return null;
     return produit.categorie === 'boulangerie' ? vendeurActif.boulangerie : vendeurActif.patisserie;
   };
-
   // Soumettre une réception
   const handleSubmitReception = async () => {
     if (!receptionForm.produit_id || receptionForm.quantite <= 0 || !user) {
       toast.error('Veuillez remplir tous les champs obligatoires');
       return;
     }
-    
     const vendeurAssigne = getVendeurAssigne(receptionForm.produit_id);
     if (!vendeurAssigne) {
       toast.error('Aucun vendeur actif pour cette catégorie');
       return;
     }
-    
     setIsSubmitting(true);
-    
     try {
       const db = await getDB();
       const now = new Date().toISOString();
-      
       const reception: ReceptionPointeur = {
         local_id: generateLocalId(),
         pointeur_id: user.id,
@@ -199,15 +218,12 @@ export default function PointeurDashboard() {
         created_at: now,
         updated_at: now,
       };
-      
       await db.add('receptions_pointeur', reception);
-      
       // Rafraîchir la liste
       const allReceptions = await db.getAllFromIndex('receptions_pointeur', 'by-pointeur', user.id);
-      setReceptions(allReceptions.sort((a, b) => 
+      setReceptions(allReceptions.sort((a, b) =>
         new Date(b.date_reception).getTime() - new Date(a.date_reception).getTime()
       ));
-      
       // Reset formulaire
       setReceptionForm({
         producteur_id: 1,
@@ -215,11 +231,9 @@ export default function PointeurDashboard() {
         quantite: 0,
         notes: '',
       });
-      
       toast.success('Réception enregistrée !', {
         description: `${receptionForm.quantite} unité(s) assignées à ${vendeurAssigne.name}`,
       });
-      
     } catch (error) {
       console.error('Erreur réception:', error);
       toast.error('Erreur lors de l\'enregistrement');
@@ -227,24 +241,25 @@ export default function PointeurDashboard() {
       setIsSubmitting(false);
     }
   };
-
   // Soumettre un retour
   const handleSubmitRetour = async () => {
-    if (!retourForm.vendeur_id || !retourForm.produit_id || retourForm.quantite <= 0 || !user) {
+    if (!retourForm.produit_id || retourForm.quantite <= 0 || !user) {
       toast.error('Veuillez remplir tous les champs obligatoires');
       return;
     }
-    
+    const vendeurAssigne = getVendeurAssigne(retourForm.produit_id);
+    if (!vendeurAssigne) {
+      toast.error('Aucun vendeur actif pour cette catégorie');
+      return;
+    }
     setIsSubmitting(true);
-    
     try {
       const db = await getDB();
       const now = new Date().toISOString();
-      
       const retour: RetourProduit = {
         local_id: generateLocalId(),
         pointeur_id: user.id,
-        vendeur_id: retourForm.vendeur_id,
+        vendeur_id: vendeurAssigne.id,
         produit_id: retourForm.produit_id,
         quantite: retourForm.quantite,
         raison: retourForm.raison,
@@ -255,29 +270,22 @@ export default function PointeurDashboard() {
         created_at: now,
         updated_at: now,
       };
-      
       await db.add('retours_produits', retour);
-      
       // Rafraîchir la liste
       const allRetours = await db.getAllFromIndex('retours_produits', 'by-pointeur', user.id);
-      setRetours(allRetours.sort((a, b) => 
+      setRetours(allRetours.sort((a, b) =>
         new Date(b.date_retour).getTime() - new Date(a.date_retour).getTime()
       ));
-      
       // Reset formulaire
       setRetourForm({
-        vendeur_id: null,
         produit_id: null,
         quantite: 0,
         raison: 'perime',
         description: '',
       });
-      
-      const vendeur = vendeurs.find(v => v.id === retourForm.vendeur_id);
       toast.success('Retour enregistré !', {
-        description: `${retourForm.quantite} unité(s) retournées par ${vendeur?.name}`,
+        description: `${retourForm.quantite} unité(s) retournées par ${vendeurAssigne.name}`,
       });
-      
     } catch (error) {
       console.error('Erreur retour:', error);
       toast.error('Erreur lors de l\'enregistrement');
@@ -285,16 +293,13 @@ export default function PointeurDashboard() {
       setIsSubmitting(false);
     }
   };
-
   // Ouvrir le modal d'édition
   const openEditModal = (type: 'reception' | 'retour', item: ReceptionPointeur | RetourProduit) => {
     if (item.verrou) {
       toast.error('Cet enregistrement est verrouillé par le PDG');
       return;
     }
-    
     setEditModal({ isOpen: true, type, item });
-    
     if (type === 'reception') {
       const rec = item as ReceptionPointeur;
       setEditForm({
@@ -313,17 +318,13 @@ export default function PointeurDashboard() {
       });
     }
   };
-
   // Sauvegarder les modifications
   const handleSaveEdit = async () => {
     if (!editModal.item || !user) return;
-    
     setIsSubmitting(true);
-    
     try {
       const db = await getDB();
       const now = new Date().toISOString();
-      
       if (editModal.type === 'reception') {
         const rec = editModal.item as ReceptionPointeur;
         const updated: ReceptionPointeur = {
@@ -334,10 +335,9 @@ export default function PointeurDashboard() {
           updated_at: now,
         };
         await db.put('receptions_pointeur', updated);
-        
         // Rafraîchir
         const allReceptions = await db.getAllFromIndex('receptions_pointeur', 'by-pointeur', user.id);
-        setReceptions(allReceptions.sort((a, b) => 
+        setReceptions(allReceptions.sort((a, b) =>
           new Date(b.date_reception).getTime() - new Date(a.date_reception).getTime()
         ));
       } else {
@@ -351,17 +351,14 @@ export default function PointeurDashboard() {
           updated_at: now,
         };
         await db.put('retours_produits', updated);
-        
         // Rafraîchir
         const allRetours = await db.getAllFromIndex('retours_produits', 'by-pointeur', user.id);
-        setRetours(allRetours.sort((a, b) => 
+        setRetours(allRetours.sort((a, b) =>
           new Date(b.date_retour).getTime() - new Date(a.date_retour).getTime()
         ));
       }
-      
       setEditModal({ isOpen: false, type: null, item: null });
       toast.success('Modification enregistrée !');
-      
     } catch (error) {
       console.error('Erreur modification:', error);
       toast.error('Erreur lors de la modification');
@@ -369,30 +366,36 @@ export default function PointeurDashboard() {
       setIsSubmitting(false);
     }
   };
-
-  const selectedProduit = produits.find(p => p.id === receptionForm.produit_id);
-  const vendeurAssigne = getVendeurAssigne(receptionForm.produit_id);
-  
+  const selectedProduitReception = produits.find(p => p.id === receptionForm.produit_id);
+  const vendeurAssigneReception = getVendeurAssigne(receptionForm.produit_id);
+  const selectedProduitRetour = produits.find(p => p.id === retourForm.produit_id);
+  const vendeurAssigneRetour = getVendeurAssigne(retourForm.produit_id);
   const raisonLabels = {
     perime: '🕐 Périmé',
     abime: '💔 Abîmé',
     autre: '📝 Autre',
   };
-
   const tabs = [
     { id: 'reception' as const, icon: Package, label: 'Réception' },
     { id: 'retour' as const, icon: Undo2, label: 'Retour' },
     { id: 'mes-receptions' as const, icon: Check, label: 'Mes Réceptions' },
     { id: 'mes-retours' as const, icon: AlertTriangle, label: 'Mes Retours' },
   ];
-
   return (
     <div className="min-h-screen bg-background">
-      <Header 
-        title="Tableau de bord Pointeur" 
+      <Header
+        title="Tableau de bord Pointeur"
         onViewDatabase={() => setShowDbViewer(true)}
       />
-      
+      {/* Indicateur de rafraîchissement subtil */}
+      {isRefreshing && (
+        <div className="fixed top-20 right-4 z-50 animate-fade-in">
+          <div className="bg-primary/10 border border-primary/20 rounded-lg px-3 py-2 flex items-center gap-2">
+            <Loader2 className="w-4 h-4 animate-spin text-primary" />
+            <span className="text-sm text-primary font-medium">Mise à jour...</span>
+          </div>
+        </div>
+      )}
       {/* Navigation tabs */}
       <div className="px-4 py-3 border-b bg-card/50 sticky top-[73px] z-40">
         <div className="flex gap-2 overflow-x-auto pb-1">
@@ -408,7 +411,6 @@ export default function PointeurDashboard() {
           ))}
         </div>
       </div>
-
       {/* Contenu principal */}
       <main className="p-4 pb-24 max-w-4xl mx-auto">
         {isLoading ? (
@@ -424,7 +426,6 @@ export default function PointeurDashboard() {
                   <h2 className="font-display text-xl font-semibold mb-6">
                     Nouvelle réception
                   </h2>
-                  
                   {/* Producteur */}
                   <div className="space-y-2 mb-4">
                     <Label>Producteur</Label>
@@ -442,7 +443,6 @@ export default function PointeurDashboard() {
                       placeholder="Sélectionner un producteur"
                     />
                   </div>
-                  
                   {/* Produit */}
                   <div className="space-y-2 mb-4">
                     <Label>Produit *</Label>
@@ -457,7 +457,6 @@ export default function PointeurDashboard() {
                       placeholder="Rechercher un produit..."
                     />
                   </div>
-                  
                   {/* Quantité */}
                   <div className="space-y-2 mb-4">
                     <Label>Quantité *</Label>
@@ -469,7 +468,6 @@ export default function PointeurDashboard() {
                       size="lg"
                     />
                   </div>
-                  
                   {/* Notes */}
                   <div className="space-y-2 mb-6">
                     <Label>Notes (optionnel)</Label>
@@ -481,9 +479,8 @@ export default function PointeurDashboard() {
                       rows={2}
                     />
                   </div>
-                  
                   {/* Vendeur assigné */}
-                  {vendeurAssigne && selectedProduit && (
+                  {vendeurAssigneReception && selectedProduitReception && (
                     <div className="p-4 rounded-lg bg-success/10 border border-success/30 mb-6 animate-scale-in">
                       <div className="flex items-center gap-3">
                         <div className="w-10 h-10 rounded-full bg-success/20 flex items-center justify-center">
@@ -491,13 +488,12 @@ export default function PointeurDashboard() {
                         </div>
                         <div>
                           <p className="text-sm text-success font-medium">Vendeur assigné automatiquement</p>
-                          <p className="font-semibold">{vendeurAssigne.name}</p>
+                          <p className="font-semibold">{vendeurAssigneReception.name}</p>
                         </div>
-                        <CategoryBadge category={selectedProduit.categorie} size="md" />
+                        <CategoryBadge category={selectedProduitReception.categorie} size="md" />
                       </div>
                     </div>
                   )}
-                  
                   <Button
                     onClick={handleSubmitReception}
                     disabled={isSubmitting || !receptionForm.produit_id || receptionForm.quantite <= 0}
@@ -518,7 +514,6 @@ export default function PointeurDashboard() {
                 </div>
               </div>
             )}
-
             {/* Tab Retour */}
             {activeTab === 'retour' && (
               <div className="space-y-6 animate-fade-in">
@@ -526,22 +521,6 @@ export default function PointeurDashboard() {
                   <h2 className="font-display text-xl font-semibold mb-6">
                     Enregistrer un retour
                   </h2>
-                  
-                  {/* Vendeur */}
-                  <div className="space-y-2 mb-4">
-                    <Label>Vendeur *</Label>
-                    <SearchableSelect
-                      options={vendeurs.map(v => ({
-                        value: v.id,
-                        label: v.name,
-                        description: `${v.role === 'vendeur_boulangerie' ? 'Boulangerie' : 'Pâtisserie'} - ${v.numero_telephone}`,
-                      }))}
-                      value={retourForm.vendeur_id}
-                      onChange={(v) => setRetourForm({ ...retourForm, vendeur_id: v as number })}
-                      placeholder="Sélectionner un vendeur..."
-                    />
-                  </div>
-                  
                   {/* Produit */}
                   <div className="space-y-2 mb-4">
                     <Label>Produit *</Label>
@@ -556,7 +535,6 @@ export default function PointeurDashboard() {
                       placeholder="Rechercher un produit..."
                     />
                   </div>
-                  
                   {/* Quantité */}
                   <div className="space-y-2 mb-4">
                     <Label>Quantité *</Label>
@@ -568,7 +546,6 @@ export default function PointeurDashboard() {
                       size="lg"
                     />
                   </div>
-                  
                   {/* Raison */}
                   <div className="space-y-2 mb-4">
                     <Label>Raison du retour *</Label>
@@ -589,7 +566,6 @@ export default function PointeurDashboard() {
                       ))}
                     </div>
                   </div>
-                  
                   {/* Description */}
                   <div className="space-y-2 mb-6">
                     <Label>Description (optionnel)</Label>
@@ -601,10 +577,24 @@ export default function PointeurDashboard() {
                       rows={2}
                     />
                   </div>
-                  
+                  {/* Vendeur assigné */}
+                  {vendeurAssigneRetour && selectedProduitRetour && (
+                    <div className="p-4 rounded-lg bg-success/10 border border-success/30 mb-6 animate-scale-in">
+                      <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 rounded-full bg-success/20 flex items-center justify-center">
+                          <User className="w-5 h-5 text-success" />
+                        </div>
+                        <div>
+                          <p className="text-sm text-success font-medium">Vendeur assigné automatiquement</p>
+                          <p className="font-semibold">{vendeurAssigneRetour.name}</p>
+                        </div>
+                        <CategoryBadge category={selectedProduitRetour.categorie} size="md" />
+                      </div>
+                    </div>
+                  )}
                   <Button
                     onClick={handleSubmitRetour}
-                    disabled={isSubmitting || !retourForm.vendeur_id || !retourForm.produit_id || retourForm.quantite <= 0}
+                    disabled={isSubmitting || !retourForm.produit_id || retourForm.quantite <= 0}
                     className="btn-golden w-full"
                   >
                     {isSubmitting ? (
@@ -622,7 +612,6 @@ export default function PointeurDashboard() {
                 </div>
               </div>
             )}
-
             {/* Tab Mes Réceptions */}
             {activeTab === 'mes-receptions' && (
               <div className="space-y-4 animate-fade-in">
@@ -634,7 +623,6 @@ export default function PointeurDashboard() {
                     {receptions.length} réception(s)
                   </span>
                 </div>
-                
                 {receptions.length === 0 ? (
                   <EmptyState
                     icon="inbox"
@@ -646,8 +634,8 @@ export default function PointeurDashboard() {
                     {receptions.map((rec) => {
                       const produit = produits.find(p => p.id === rec.produit_id);
                       return (
-                        <div 
-                          key={rec.id || rec.local_id} 
+                        <div
+                          key={rec.id || rec.local_id}
                           className="card-premium p-4 cursor-pointer hover:ring-2 hover:ring-primary/20 transition-all"
                           onClick={() => openEditModal('reception', rec)}
                         >
@@ -686,7 +674,6 @@ export default function PointeurDashboard() {
                 )}
               </div>
             )}
-
             {/* Tab Mes Retours */}
             {activeTab === 'mes-retours' && (
               <div className="space-y-4 animate-fade-in">
@@ -698,7 +685,6 @@ export default function PointeurDashboard() {
                     {retours.length} retour(s)
                   </span>
                 </div>
-                
                 {retours.length === 0 ? (
                   <EmptyState
                     icon="inbox"
@@ -711,8 +697,8 @@ export default function PointeurDashboard() {
                       const produit = produits.find(p => p.id === ret.produit_id);
                       const vendeur = vendeurs.find(v => v.id === ret.vendeur_id);
                       return (
-                        <div 
-                          key={ret.id || ret.local_id} 
+                        <div
+                          key={ret.id || ret.local_id}
                           className="card-premium p-4 cursor-pointer hover:ring-2 hover:ring-primary/20 transition-all"
                           onClick={() => openEditModal('retour', ret)}
                         >
@@ -760,7 +746,6 @@ export default function PointeurDashboard() {
           </>
         )}
       </main>
-
       {/* Modal d'édition */}
       <Dialog open={editModal.isOpen} onOpenChange={(open) => !open && setEditModal({ isOpen: false, type: null, item: null })}>
         <DialogContent className="max-w-md">
@@ -769,7 +754,6 @@ export default function PointeurDashboard() {
               {editModal.type === 'reception' ? 'Modifier la réception' : 'Modifier le retour'}
             </DialogTitle>
           </DialogHeader>
-          
           <div className="space-y-4 py-4">
             {/* Quantité */}
             <div className="space-y-2">
@@ -782,7 +766,6 @@ export default function PointeurDashboard() {
                 size="lg"
               />
             </div>
-            
             {editModal.type === 'reception' ? (
               <div className="space-y-2">
                 <Label>Notes</Label>
@@ -815,7 +798,6 @@ export default function PointeurDashboard() {
                     ))}
                   </div>
                 </div>
-                
                 <div className="space-y-2">
                   <Label>Description</Label>
                   <Textarea
@@ -829,10 +811,9 @@ export default function PointeurDashboard() {
               </>
             )}
           </div>
-          
           <DialogFooter className="gap-2">
-            <Button 
-              variant="outline" 
+            <Button
+              variant="outline"
               onClick={() => setEditModal({ isOpen: false, type: null, item: null })}
             >
               Annuler
@@ -851,7 +832,6 @@ export default function PointeurDashboard() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-
       {/* Database Viewer Modal */}
       <DatabaseViewer isOpen={showDbViewer} onClose={() => setShowDbViewer(false)} />
     </div>

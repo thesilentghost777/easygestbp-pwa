@@ -1,7 +1,3 @@
-/**
- * EasyGest BP - Dashboard Vendeur
- */
-
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import { useSync } from '@/contexts/SyncContext';
@@ -26,37 +22,37 @@ import {
   Clock,
   DollarSign,
   Smartphone,
-  ArrowRightLeft
+  ArrowRightLeft,
+  UserCheck
 } from 'lucide-react';
-import { getDB, generateLocalId, type Produit, type User as DBUser, type SessionVente, type ReceptionPointeur } from '@/lib/db';
+import { getDB, generateLocalId, type Produit, type User as DBUser, type SessionVente, type ReceptionPointeur, type RetourProduit, type Inventaire, type InventaireDetail } from '@/lib/db';
 import { autoSyncOnDashboard } from '@/lib/sync';
 import { toast } from 'sonner';
 import { format } from 'date-fns';
 import { fr } from 'date-fns/locale';
-
+import bcrypt from 'bcryptjs';
 type TabType = 'receptions' | 'inventaire' | 'session' | 'retours' | 'flux';
-
 export default function VendeurDashboard() {
-  const { user } = useAuth();
-  const { sync, status } = useSync();
-  
+  const { user, login, logout } = useAuth();
+  const { sync, status, syncCounter } = useSync();
   const [activeTab, setActiveTab] = useState<TabType>('receptions');
   const [showDbViewer, setShowDbViewer] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
-  
+  // État du splash screen
+  const [showSplash, setShowSplash] = useState(false);
+  const [splashVendeurName, setSplashVendeurName] = useState('');
   // Données
   const [produits, setProduits] = useState<Produit[]>([]);
   const [vendeurs, setVendeurs] = useState<DBUser[]>([]);
   const [receptions, setReceptions] = useState<ReceptionPointeur[]>([]);
+  const [retours, setRetours] = useState<RetourProduit[]>([]);
   const [sessionActive, setSessionActive] = useState<SessionVente | null>(null);
-  
   // Formulaire session
   const [sessionForm, setSessionForm] = useState({
     fond_vente: 0,
     orange_money_initial: 0,
     mtn_money_initial: 0,
   });
-  
   // Formulaire inventaire
   const [inventaireForm, setInventaireForm] = useState({
     vendeur_entrant_id: null as number | null,
@@ -65,43 +61,44 @@ export default function VendeurDashboard() {
     pin_entrant: '',
     step: 1,
   });
-  
   const [isSubmitting, setIsSubmitting] = useState(false);
-
   const categorie = user?.role === 'vendeur_boulangerie' ? 'boulangerie' : 'patisserie';
-
   // Charger les données
   useEffect(() => {
     const loadData = async () => {
       setIsLoading(true);
       try {
-        await autoSyncOnDashboard();
-        
+        if (syncCounter === 0) {
+          await autoSyncOnDashboard();
+        }
+  
         const db = await getDB();
-        
-        // Charger produits de ma catégorie
+  
         const allProduits = await db.getAll('produits');
         setProduits(allProduits.filter(p => p.actif && p.categorie === categorie));
-        
-        // Charger vendeurs de ma catégorie
+  
         const allUsers = await db.getAll('users');
         const vendeurRole = `vendeur_${categorie}`;
         setVendeurs(allUsers.filter(u => u.role === vendeurRole && u.actif && u.id !== user?.id));
-        
-        // Charger mes réceptions du jour
+  
         if (user) {
           const allReceptions = await db.getAllFromIndex('receptions_pointeur', 'by-vendeur', user.id);
           const today = new Date().toISOString().split('T')[0];
           setReceptions(allReceptions.filter(r => r.date_reception.startsWith(today)));
         }
-        
-        // Charger session active
+  
+        if (user) {
+          const allRetours = await db.getAllFromIndex('retours_produits', 'by-vendeur', user.id);
+          const today = new Date().toISOString().split('T')[0];
+          setRetours(allRetours.filter(r => r.date_retour.startsWith(today)));
+        }
+  
         if (user) {
           const allSessions = await db.getAllFromIndex('sessions_vente', 'by-vendeur', user.id);
           const active = allSessions.find(s => s.statut === 'ouverte');
           setSessionActive(active || null);
         }
-        
+  
       } catch (error) {
         console.error('Erreur chargement:', error);
         toast.error('Erreur lors du chargement');
@@ -109,19 +106,15 @@ export default function VendeurDashboard() {
         setIsLoading(false);
       }
     };
-    
     loadData();
-  }, [user, categorie]);
-
+  }, [user, categorie, syncCounter]);
   // Ouvrir une session
   const handleOpenSession = async () => {
     if (!user) return;
-    
     setIsSubmitting(true);
     try {
       const db = await getDB();
       const now = new Date().toISOString();
-      
       const session: SessionVente = {
         local_id: generateLocalId(),
         vendeur_id: user.id,
@@ -135,14 +128,11 @@ export default function VendeurDashboard() {
         created_at: now,
         updated_at: now,
       };
-      
       await db.add('sessions_vente', session);
       setSessionActive(session);
-      
       toast.success('Session ouverte !', {
         description: `Fond de vente: ${sessionForm.fond_vente} XAF`,
       });
-      
     } catch (error) {
       console.error('Erreur session:', error);
       toast.error('Erreur lors de l\'ouverture');
@@ -150,7 +140,93 @@ export default function VendeurDashboard() {
       setIsSubmitting(false);
     }
   };
-
+  // Valider et créer l'inventaire
+  const handleValidateInventaire = async () => {
+    if (!user || !inventaireForm.vendeur_entrant_id) return;
+    setIsSubmitting(true);
+    try {
+      const db = await getDB();
+      const now = new Date().toISOString();
+      // Récupérer les utilisateurs
+      const sortantUser = await db.get('users', user.id);
+      if (!sortantUser) {
+        throw new Error('Utilisateur sortant non trouvé');
+      }
+   
+      const isSortantValid = bcrypt.compareSync(inventaireForm.pin_sortant, sortantUser.code_pin);
+      if (!isSortantValid) {
+        throw new Error('PIN sortant incorrect');
+      }
+      const entrantUser = await db.get('users', inventaireForm.vendeur_entrant_id);
+      if (!entrantUser) {
+        throw new Error('Utilisateur entrant non trouvé');
+      }
+   
+      const isEntrantValid = bcrypt.compareSync(inventaireForm.pin_entrant, entrantUser.code_pin);
+      if (!isEntrantValid) {
+        throw new Error('PIN entrant incorrect');
+      }
+      const local_id = generateLocalId();
+      const inventaire: Inventaire = {
+        local_id,
+        vendeur_sortant_id: user.id,
+        vendeur_entrant_id: inventaireForm.vendeur_entrant_id,
+        categorie,
+        valide_sortant: true,
+        valide_entrant: true,
+        date_inventaire: now,
+        sync_status: 'pending',
+        created_at: now,
+        updated_at: now,
+      };
+      await db.add('inventaires', inventaire);
+      // Ajouter les détails
+      for (const [produit_id_str, quantite_restante] of Object.entries(inventaireForm.produits)) {
+        const produit_id = parseInt(produit_id_str);
+        const detail: InventaireDetail = {
+          inventaire_local_id: local_id,
+          produit_id,
+          quantite_restante,
+          sync_status: 'pending',
+          created_at: now,
+          updated_at: now,
+        };
+        await db.add('inventaire_details', detail);
+      }
+      toast.success('Inventaire créé avec succès !');
+      // Afficher le splash screen avec le nom du vendeur entrant
+      setSplashVendeurName(entrantUser.name);
+      setShowSplash(true);
+   
+      // Attendre 4 secondes
+      await new Promise(resolve => setTimeout(resolve, 4000));
+   
+      // Masquer le splash
+      setShowSplash(false);
+      // Déconnexion du sortant
+      await logout();
+      // Connexion automatique de l'entrant
+      const entrantPhone = entrantUser.numero_telephone;
+      const loginResult = await login(entrantPhone, inventaireForm.pin_entrant);
+      if (!loginResult.success) {
+        window.location.href = '/login';
+      } else {
+        // Reset form
+        setInventaireForm({
+          vendeur_entrant_id: null,
+          produits: {},
+          pin_sortant: '',
+          pin_entrant: '',
+          step: 1,
+        });
+      }
+    } catch (error: any) {
+      console.error('Erreur inventaire:', error);
+      toast.error(error.message || 'Erreur lors de la validation de l\'inventaire');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
   const tabs = [
     { id: 'receptions' as const, icon: Package, label: 'Réceptions' },
     { id: 'inventaire' as const, icon: ClipboardList, label: 'Inventaire' },
@@ -158,18 +234,36 @@ export default function VendeurDashboard() {
     { id: 'retours' as const, icon: Undo2, label: 'Retours' },
     { id: 'flux' as const, icon: TrendingUp, label: 'Mon Flux' },
   ];
-
-  // Calcul des totaux
   const totalReceptions = receptions.reduce((sum, r) => sum + r.quantite, 0);
-
+  const totalRetours = retours.reduce((sum, r) => sum + r.quantite, 0);
+  // Splash Screen pour changement de vendeur
+  if (showSplash) {
+    return (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-gradient-to-br from-primary/20 via-background to-primary/10">
+        <div className="text-center space-y-6 animate-fade-in p-8">
+          <div className="w-24 h-24 mx-auto rounded-full bg-primary/10 flex items-center justify-center shadow-golden animate-pulse">
+            <UserCheck className="w-12 h-12 text-primary" />
+          </div>
+          <div className="space-y-2">
+            <h2 className="font-display text-2xl font-bold">Changement de vendeur</h2>
+            <p className="text-lg text-muted-foreground">
+              Le vendeur actif sera désormais
+            </p>
+            <p className="text-xl font-bold text-primary">
+              {splashVendeurName}
+            </p>
+          </div>
+          <Loader2 className="w-8 h-8 mx-auto animate-spin text-primary" />
+        </div>
+      </div>
+    );
+  }
   return (
     <div className="min-h-screen bg-background">
-      <Header 
+      <Header
         title={`Vendeur ${categorie === 'boulangerie' ? 'Boulangerie' : 'Pâtisserie'}`}
         onViewDatabase={() => setShowDbViewer(true)}
       />
-      
-      {/* Info catégorie */}
       <div className="px-4 py-2 bg-muted/30 border-b flex items-center justify-between">
         <CategoryBadge category={categorie} size="md" />
         {sessionActive && (
@@ -179,8 +273,6 @@ export default function VendeurDashboard() {
           </span>
         )}
       </div>
-      
-      {/* Navigation tabs */}
       <div className="px-4 py-3 border-b bg-card/50 sticky top-[73px] z-40 overflow-x-auto">
         <div className="flex gap-2 min-w-max">
           {tabs.map((tab) => (
@@ -195,8 +287,7 @@ export default function VendeurDashboard() {
           ))}
         </div>
       </div>
-
-      {/* Contenu */}
+   
       <main className="p-4 pb-24 max-w-4xl mx-auto">
         {isLoading ? (
           <div className="flex items-center justify-center py-20">
@@ -204,7 +295,6 @@ export default function VendeurDashboard() {
           </div>
         ) : (
           <>
-            {/* Tab Réceptions */}
             {activeTab === 'receptions' && (
               <div className="space-y-4 animate-fade-in">
                 <div className="flex items-center justify-between">
@@ -215,7 +305,7 @@ export default function VendeurDashboard() {
                     {totalReceptions} unités
                   </span>
                 </div>
-                
+          
                 {receptions.length === 0 ? (
                   <EmptyState
                     icon="inbox"
@@ -245,8 +335,7 @@ export default function VendeurDashboard() {
                 )}
               </div>
             )}
-
-            {/* Tab Inventaire */}
+         
             {activeTab === 'inventaire' && (
               <div className="space-y-6 animate-fade-in">
                 <div className="card-premium p-6">
@@ -256,7 +345,7 @@ export default function VendeurDashboard() {
                   <p className="text-sm text-muted-foreground mb-6">
                     Passation de service avec le vendeur suivant
                   </p>
-                  
+            
                   {inventaireForm.step === 1 && (
                     <div className="space-y-4">
                       <div className="space-y-2">
@@ -272,7 +361,7 @@ export default function VendeurDashboard() {
                           placeholder="Sélectionner le vendeur entrant"
                         />
                       </div>
-                      
+                
                       <div className="border-t pt-4 mt-4">
                         <Label className="mb-4 block">Quantités restantes par produit</Label>
                         <div className="space-y-3 max-h-80 overflow-y-auto">
@@ -291,7 +380,7 @@ export default function VendeurDashboard() {
                           ))}
                         </div>
                       </div>
-                      
+                
                       <Button
                         onClick={() => setInventaireForm({ ...inventaireForm, step: 2 })}
                         disabled={!inventaireForm.vendeur_entrant_id}
@@ -301,7 +390,7 @@ export default function VendeurDashboard() {
                       </Button>
                     </div>
                   )}
-                  
+            
                   {inventaireForm.step === 2 && (
                     <div className="space-y-6">
                       <div className="p-4 rounded-lg bg-muted/50">
@@ -310,7 +399,7 @@ export default function VendeurDashboard() {
                           {Object.values(inventaireForm.produits).reduce((a, b) => a + b, 0)} produits restants au total
                         </p>
                       </div>
-                      
+                
                       <div className="space-y-3">
                         <Label className="text-center block">Votre code PIN (sortant)</Label>
                         <PINInput
@@ -318,7 +407,7 @@ export default function VendeurDashboard() {
                           onChange={(v) => setInventaireForm({ ...inventaireForm, pin_sortant: v })}
                         />
                       </div>
-                      
+                
                       <div className="space-y-3">
                         <Label className="text-center block">Code PIN du vendeur entrant</Label>
                         <PINInput
@@ -326,7 +415,7 @@ export default function VendeurDashboard() {
                           onChange={(v) => setInventaireForm({ ...inventaireForm, pin_entrant: v })}
                         />
                       </div>
-                      
+                
                       <div className="flex gap-3">
                         <Button
                           variant="outline"
@@ -336,10 +425,11 @@ export default function VendeurDashboard() {
                           Retour
                         </Button>
                         <Button
-                          disabled={inventaireForm.pin_sortant.length !== 6 || inventaireForm.pin_entrant.length !== 6}
+                          onClick={handleValidateInventaire}
+                          disabled={isSubmitting || inventaireForm.pin_sortant.length !== 6 || inventaireForm.pin_entrant.length !== 6}
                           className="btn-golden flex-1"
                         >
-                          Valider l'inventaire
+                          {isSubmitting ? <Loader2 className="w-5 h-5 animate-spin" /> : 'Valider l\'inventaire'}
                         </Button>
                       </div>
                     </div>
@@ -347,8 +437,8 @@ export default function VendeurDashboard() {
                 </div>
               </div>
             )}
-
-            {/* Tab Session */}
+         
+            {/* Autres tabs (session, retours, flux) - identiques au code original */}
             {activeTab === 'session' && (
               <div className="space-y-6 animate-fade-in">
                 {sessionActive ? (
@@ -360,7 +450,7 @@ export default function VendeurDashboard() {
                         Ouverte
                       </span>
                     </div>
-                    
+              
                     <div className="space-y-4">
                       <div className="flex items-center justify-between p-3 rounded-lg bg-muted/30">
                         <span className="text-muted-foreground">Ouverture</span>
@@ -368,7 +458,7 @@ export default function VendeurDashboard() {
                           {format(new Date(sessionActive.date_ouverture), 'dd/MM/yyyy HH:mm', { locale: fr })}
                         </span>
                       </div>
-                      
+                
                       <div className="flex items-center justify-between p-3 rounded-lg bg-muted/30">
                         <span className="flex items-center gap-2 text-muted-foreground">
                           <DollarSign className="w-4 h-4" />
@@ -376,7 +466,7 @@ export default function VendeurDashboard() {
                         </span>
                         <span className="font-bold text-lg">{sessionActive.fond_vente.toLocaleString()} XAF</span>
                       </div>
-                      
+                
                       <div className="flex items-center justify-between p-3 rounded-lg bg-muted/30">
                         <span className="flex items-center gap-2 text-muted-foreground">
                           <Smartphone className="w-4 h-4 text-orange-500" />
@@ -384,7 +474,7 @@ export default function VendeurDashboard() {
                         </span>
                         <span className="font-medium">{sessionActive.orange_money_initial.toLocaleString()} XAF</span>
                       </div>
-                      
+                
                       <div className="flex items-center justify-between p-3 rounded-lg bg-muted/30">
                         <span className="flex items-center gap-2 text-muted-foreground">
                           <Smartphone className="w-4 h-4 text-yellow-500" />
@@ -393,7 +483,7 @@ export default function VendeurDashboard() {
                         <span className="font-medium">{sessionActive.mtn_money_initial.toLocaleString()} XAF</span>
                       </div>
                     </div>
-                    
+              
                     <div className="mt-6 p-4 rounded-lg bg-info/10 text-info text-sm text-center">
                       ℹ️ Seul le PDG peut fermer cette session
                     </div>
@@ -403,7 +493,7 @@ export default function VendeurDashboard() {
                     <h2 className="font-display text-xl font-semibold mb-6">
                       Ouvrir une session de vente
                     </h2>
-                    
+              
                     <div className="space-y-4">
                       <div className="space-y-2">
                         <Label className="flex items-center gap-2">
@@ -419,7 +509,7 @@ export default function VendeurDashboard() {
                           placeholder="0"
                         />
                       </div>
-                      
+                
                       <div className="space-y-2">
                         <Label className="flex items-center gap-2">
                           <Smartphone className="w-4 h-4 text-orange-500" />
@@ -434,7 +524,7 @@ export default function VendeurDashboard() {
                           placeholder="0"
                         />
                       </div>
-                      
+                
                       <div className="space-y-2">
                         <Label className="flex items-center gap-2">
                           <Smartphone className="w-4 h-4 text-yellow-500" />
@@ -449,7 +539,7 @@ export default function VendeurDashboard() {
                           placeholder="0"
                         />
                       </div>
-                      
+                
                       <Button
                         onClick={handleOpenSession}
                         disabled={isSubmitting}
@@ -472,28 +562,54 @@ export default function VendeurDashboard() {
                 )}
               </div>
             )}
-
-            {/* Tab Retours */}
+         
             {activeTab === 'retours' && (
               <div className="space-y-4 animate-fade-in">
-                <h2 className="font-display text-xl font-semibold">
-                  Retours me concernant
-                </h2>
-                <EmptyState
-                  icon="inbox"
-                  title="Aucun retour"
-                  description="Les retours de produits vous concernant apparaîtront ici"
-                />
+                <div className="flex items-center justify-between">
+                  <h2 className="font-display text-xl font-semibold">
+                    Retours me concernant
+                  </h2>
+                  <span className="px-3 py-1 rounded-full bg-primary/10 text-primary font-medium">
+                    {totalRetours} unités
+                  </span>
+                </div>
+          
+                {retours.length === 0 ? (
+                  <EmptyState
+                    icon="inbox"
+                    title="Aucun retour"
+                    description="Les retours de produits vous concernant apparaîtront ici"
+                  />
+                ) : (
+                  <div className="space-y-3">
+                    {retours.map((ret) => {
+                      const produit = produits.find(p => p.id === ret.produit_id);
+                      return (
+                        <div key={ret.id || ret.local_id} className="card-premium p-4">
+                          <div className="flex items-center justify-between">
+                            <div>
+                              <p className="font-medium">{produit?.nom || `Produit #${ret.produit_id}`}</p>
+                              <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                                <Clock className="w-3 h-3" />
+                                {format(new Date(ret.date_retour), 'HH:mm', { locale: fr })}
+                              </div>
+                            </div>
+                            <span className="text-2xl font-bold text-primary">{ret.quantite}</span>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
             )}
-
-            {/* Tab Flux */}
+         
             {activeTab === 'flux' && (
               <div className="space-y-4 animate-fade-in">
                 <h2 className="font-display text-xl font-semibold">
                   Mon Flux de Produits
                 </h2>
-                
+          
                 <div className="card-premium overflow-hidden">
                   <div className="overflow-x-auto">
                     <table className="w-full text-sm">
@@ -508,18 +624,24 @@ export default function VendeurDashboard() {
                         </tr>
                       </thead>
                       <tbody>
-                        {produits.slice(0, 10).map((produit) => {
+                        {produits.map((produit) => {
                           const recu = receptions
                             .filter(r => r.produit_id === produit.id)
                             .reduce((sum, r) => sum + r.quantite, 0);
+                          const retourne = retours
+                            .filter(r => r.produit_id === produit.id)
+                            .reduce((sum, r) => sum + r.quantite, 0);
+                          const trouve = 0;
+                          const vendu = 0;
+                          const restant = recu + trouve - retourne - vendu;
                           return (
                             <tr key={produit.id} className="border-t">
                               <td className="px-4 py-3 font-medium">{produit.nom}</td>
-                              <td className="px-4 py-3 text-center">0</td>
+                              <td className="px-4 py-3 text-center">{trouve}</td>
                               <td className="px-4 py-3 text-center text-success">{recu}</td>
-                              <td className="px-4 py-3 text-center text-destructive">0</td>
-                              <td className="px-4 py-3 text-center">{recu}</td>
-                              <td className="px-4 py-3 text-center text-primary font-medium">0</td>
+                              <td className="px-4 py-3 text-center text-destructive">{retourne}</td>
+                              <td className="px-4 py-3 text-center">{restant}</td>
+                              <td className="px-4 py-3 text-center text-primary font-medium">{vendu}</td>
                             </tr>
                           );
                         })}
@@ -532,7 +654,7 @@ export default function VendeurDashboard() {
           </>
         )}
       </main>
-
+   
       <DatabaseViewer isOpen={showDbViewer} onClose={() => setShowDbViewer(false)} />
     </div>
   );

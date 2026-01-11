@@ -1,13 +1,8 @@
-/**
- * EasyGest BP - API Client
- * Communication avec le backend Laravel
- */
-
+// api.ts (assuming this is the file name based on context)
 import { getConfig, setConfig } from './db';
+import { API_URL as DEFAULT_API_URL } from './backend'; // Import default from backend.ts
 
 // Configuration API
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000/api';
-
 const DEFAULT_HEADERS = {
   'Content-Type': 'application/json',
   'Accept': 'application/json',
@@ -52,28 +47,29 @@ async function apiRequest<T>(
 ): Promise<ApiResponse<T>> {
   const token = await getAuthToken();
   const clientId = await getClientId();
-  
+  const apiBaseUrl = await getConfig<string>('api_url') || import.meta.env.VITE_API_URL || DEFAULT_API_URL;
+
   const headers: Record<string, string> = {
     ...DEFAULT_HEADERS,
     ...(options.headers as Record<string, string>),
   };
-  
+
   if (token) {
     headers['Authorization'] = `Bearer ${token}`;
   }
-  
+
   if (clientId) {
     headers['X-Client-ID'] = clientId;
   }
-  
+
   try {
-    const response = await fetch(`${API_BASE_URL}${endpoint}`, {
+    const response = await fetch(`${apiBaseUrl}${endpoint}`, {
       ...options,
       headers,
     });
-    
+
     const data = await response.json();
-    
+
     if (!response.ok) {
       return {
         success: false,
@@ -81,7 +77,7 @@ async function apiRequest<T>(
         error: data.error,
       };
     }
-    
+
     return data;
   } catch (error) {
     // Erreur réseau
@@ -128,12 +124,10 @@ export const authApi = {
         device_info: navigator.userAgent,
       }),
     });
-    
     // Stocker token et user si succès
     const token = response.data?.token || (response as any).token;
     const user = response.data?.user || (response as any).user;
     const newClientId = response.data?.client_id || (response as any).client_id;
-    
     if (response.success && token) {
       await setConfig('auth_token', token);
     }
@@ -143,10 +137,8 @@ export const authApi = {
     if (response.success && user) {
       await setConfig('current_user', user);
     }
-    
     return response;
   },
-  
   async connexion(data: {
     numero_telephone: string;
     code_pin: string;
@@ -160,12 +152,10 @@ export const authApi = {
         device_info: navigator.userAgent,
       }),
     });
-    
     // Stocker token et user si succès
     const token = response.data?.token || (response as any).token;
     const user = response.data?.user || (response as any).user;
     const newClientId = response.data?.client_id || (response as any).client_id;
-    
     if (response.success && token) {
       await setConfig('auth_token', token);
     }
@@ -175,21 +165,16 @@ export const authApi = {
     if (response.success && user) {
       await setConfig('current_user', user);
     }
-    
     return response;
   },
-  
   async deconnexion(): Promise<ApiResponse<void>> {
     const response = await apiRequest<void>('/auth/deconnexion', {
       method: 'POST',
     });
-    
     await setConfig('auth_token', null);
     await setConfig('current_user', null);
-    
     return response;
   },
-  
   async me(): Promise<ApiResponse<{ user: AuthResponse['user'] }>> {
     return apiRequest('/auth/me');
   },
@@ -200,7 +185,6 @@ export const produitsApi = {
   async getAll(actifOnly = true): Promise<ApiResponse<any[]>> {
     return apiRequest(`/produits?actif_only=${actifOnly}`);
   },
-  
   async getByCategorie(categorie: 'boulangerie' | 'patisserie'): Promise<ApiResponse<any[]>> {
     return apiRequest(`/produits/categorie/${categorie}`);
   },
@@ -211,11 +195,9 @@ export const usersApi = {
   async getAll(): Promise<ApiResponse<any[]>> {
     return apiRequest('/users');
   },
-  
   async getByRole(role: string): Promise<ApiResponse<any[]>> {
     return apiRequest(`/users/role/${role}`);
   },
-  
   async getProducteurs(): Promise<ApiResponse<any[]>> {
     return apiRequest('/users/producteurs');
   },
@@ -234,7 +216,6 @@ export const receptionsApi = {
       body: JSON.stringify(data),
     });
   },
-  
   async update(id: number, data: {
     quantite?: number;
     notes?: string;
@@ -244,12 +225,10 @@ export const receptionsApi = {
       body: JSON.stringify(data),
     });
   },
-  
   async getMesReceptions(date?: string): Promise<ApiResponse<any[]>> {
     const params = date ? `?date=${date}` : '';
     return apiRequest(`/receptions/mes-receptions${params}`);
   },
-  
   async getReceptionsVendeur(date?: string): Promise<ApiResponse<any[]>> {
     const params = date ? `?date=${date}` : '';
     return apiRequest(`/vendeur/receptions${params}`);
@@ -269,7 +248,6 @@ export const retoursApi = {
       body: JSON.stringify(data),
     });
   },
-  
   async update(id: number, data: {
     quantite?: number;
     raison?: string;
@@ -280,7 +258,6 @@ export const retoursApi = {
       body: JSON.stringify(data),
     });
   },
-  
   async getRetoursVendeur(date?: string): Promise<ApiResponse<any[]>> {
     const params = date ? `?date=${date}` : '';
     return apiRequest(`/vendeur/retours${params}`);
@@ -301,11 +278,9 @@ export const inventairesApi = {
       body: JSON.stringify(data),
     });
   },
-  
   async getMesInventaires(): Promise<ApiResponse<any[]>> {
     return apiRequest('/inventaires/mes-inventaires');
   },
-  
   async getEnCours(): Promise<ApiResponse<any>> {
     return apiRequest('/inventaires/en-cours');
   },
@@ -323,19 +298,15 @@ export const sessionsApi = {
       body: JSON.stringify(data),
     });
   },
-  
   async getActive(): Promise<ApiResponse<any>> {
     return apiRequest('/sessions-vente/active');
   },
-  
   async getMesSessions(): Promise<ApiResponse<any[]>> {
     return apiRequest('/sessions-vente/mes-sessions');
   },
-  
   async getToutes(): Promise<ApiResponse<any[]>> {
     return apiRequest('/sessions-vente/toutes');
   },
-  
   async fermer(sessionId: number, data: {
     montant_verse: number;
     orange_money_final: number;
@@ -347,7 +318,6 @@ export const sessionsApi = {
       body: JSON.stringify(data),
     });
   },
-  
   async getHistorique(params?: {
     statut?: string;
     date_debut?: string;
@@ -357,7 +327,6 @@ export const sessionsApi = {
     if (params?.statut) searchParams.append('statut', params.statut);
     if (params?.date_debut) searchParams.append('date_debut', params.date_debut);
     if (params?.date_fin) searchParams.append('date_fin', params.date_fin);
-    
     const query = searchParams.toString();
     return apiRequest(`/sessions-vente/historique${query ? `?${query}` : ''}`);
   },
@@ -377,7 +346,6 @@ export const syncApi = {
     const params = lastSync ? `?last_sync=${encodeURIComponent(lastSync)}` : '';
     return apiRequest(`/sync/pull${params}`);
   },
-  
   async push(data: {
     receptions?: any[];
     retours?: any[];
@@ -391,14 +359,12 @@ export const syncApi = {
       body: JSON.stringify(data),
     });
   },
-  
   async ack(syncedData: { table: string; ids: number[] }[]): Promise<ApiResponse<void>> {
     return apiRequest('/sync/ack', {
       method: 'POST',
       body: JSON.stringify({ synced_data: syncedData }),
     });
   },
-  
   async status(): Promise<ApiResponse<any>> {
     return apiRequest('/sync/status');
   },
@@ -406,8 +372,9 @@ export const syncApi = {
 
 // Vérification de la connexion
 export async function checkConnection(): Promise<boolean> {
+  const apiBaseUrl = await getConfig<string>('api_url') || import.meta.env.VITE_API_URL || DEFAULT_API_URL;
   try {
-    const response = await fetch(`${API_BASE_URL}/health`, {
+    const response = await fetch(`${apiBaseUrl}/health`, {
       method: 'GET',
       headers: DEFAULT_HEADERS,
     });
