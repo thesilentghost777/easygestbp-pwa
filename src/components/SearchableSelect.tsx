@@ -1,5 +1,6 @@
 /**
- * EasyGest BP - Select avec recherche
+ * EasyGest BP - Searchable Select Component
+ * Beautiful dropdown with search functionality
  */
 
 import React, { useState, useRef, useEffect } from 'react';
@@ -36,11 +37,12 @@ export function SearchableSelect({
   const containerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  const selectedOption = options.find(opt => opt.value === value);
-  
-  const filteredOptions = options.filter(opt =>
-    opt.label.toLowerCase().includes(search.toLowerCase()) ||
-    opt.description?.toLowerCase().includes(search.toLowerCase())
+  const selectedOption = options.find((opt) => opt.value === value);
+
+  const filteredOptions = options.filter(
+    (opt) =>
+      opt.label.toLowerCase().includes(search.toLowerCase()) ||
+      opt.description?.toLowerCase().includes(search.toLowerCase())
   );
 
   useEffect(() => {
@@ -74,27 +76,31 @@ export function SearchableSelect({
         onClick={() => !disabled && setIsOpen(!isOpen)}
         disabled={disabled}
         className={cn(
-          'w-full flex items-center justify-between gap-2 px-4 py-3',
-          'bg-background border-2 border-border rounded-lg',
-          'text-left transition-all duration-200',
-          'focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none',
+          'w-full flex items-center justify-between gap-2 px-4 py-3.5',
+          'bg-background border-2 rounded-xl',
+          'text-left transition-all duration-300',
+          'focus:outline-none',
           'disabled:opacity-50 disabled:cursor-not-allowed',
-          isOpen && 'border-primary ring-2 ring-primary/20'
+          isOpen
+            ? 'border-primary ring-4 ring-primary/10'
+            : 'border-border hover:border-primary/50'
         )}
       >
-        <span className={cn(!selectedOption && 'text-muted-foreground')}>
+        <span className={cn('flex-1 truncate', !selectedOption && 'text-muted-foreground')}>
           {selectedOption?.label || placeholder}
         </span>
-        <ChevronDown className={cn(
-          'w-5 h-5 text-muted-foreground transition-transform duration-200',
-          isOpen && 'transform rotate-180'
-        )} />
+        <ChevronDown
+          className={cn(
+            'w-5 h-5 text-muted-foreground transition-transform duration-300',
+            isOpen && 'transform rotate-180 text-primary'
+          )}
+        />
       </button>
 
       {isOpen && (
-        <div className="absolute z-50 w-full mt-2 bg-popover border rounded-lg shadow-strong overflow-hidden animate-scale-in">
-          {/* Champ de recherche */}
-          <div className="p-2 border-b">
+        <div className="absolute z-50 w-full mt-2 bg-card border border-border rounded-2xl shadow-divine animate-fade-in overflow-hidden">
+          {/* Search field */}
+          <div className="p-3 border-b border-border">
             <div className="relative">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
               <input
@@ -103,41 +109,41 @@ export function SearchableSelect({
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 placeholder={searchPlaceholder}
-                className="w-full pl-9 pr-4 py-2 bg-muted/50 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-primary/20"
+                className="w-full pl-10 pr-4 py-2.5 bg-muted/50 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-primary/20 transition-all"
               />
             </div>
           </div>
 
-          {/* Liste des options */}
-          <div className="max-h-60 overflow-y-auto">
+          {/* Options list */}
+          <div className="max-h-64 overflow-y-auto p-2">
             {filteredOptions.length === 0 ? (
-              <div className="p-4 text-center text-sm text-muted-foreground">
+              <div className="py-8 text-center text-muted-foreground text-sm">
                 Aucun résultat
               </div>
             ) : (
-              filteredOptions.map((opt) => (
-                <button
-                  key={opt.value}
-                  type="button"
-                  onClick={() => handleSelect(opt)}
-                  className={cn(
-                    'w-full flex items-center gap-3 px-4 py-3 text-left',
-                    'transition-colors duration-150',
-                    'hover:bg-accent',
-                    opt.value === value && 'bg-primary/10'
-                  )}
-                >
-                  <div className="flex-1 min-w-0">
-                    <p className="font-medium truncate">{opt.label}</p>
-                    {opt.description && (
-                      <p className="text-sm text-muted-foreground truncate">{opt.description}</p>
+              <div className="space-y-1">
+                {filteredOptions.map((opt) => (
+                  <button
+                    key={opt.value}
+                    type="button"
+                    onClick={() => handleSelect(opt)}
+                    className={cn(
+                      'w-full flex items-center gap-3 px-4 py-3 text-left rounded-xl',
+                      'transition-all duration-200',
+                      'hover:bg-accent',
+                      opt.value === value && 'bg-primary/10'
                     )}
-                  </div>
-                  {opt.value === value && (
-                    <Check className="w-5 h-5 text-primary flex-shrink-0" />
-                  )}
-                </button>
-              ))
+                  >
+                    <div className="flex-1 min-w-0">
+                      <p className="font-medium truncate">{opt.label}</p>
+                      {opt.description && (
+                        <p className="text-sm text-muted-foreground truncate">{opt.description}</p>
+                      )}
+                    </div>
+                    {opt.value === value && <Check className="w-5 h-5 text-primary shrink-0" />}
+                  </button>
+                ))}
+              </div>
             )}
           </div>
         </div>

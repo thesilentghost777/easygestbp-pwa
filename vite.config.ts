@@ -4,7 +4,6 @@ import path from "path";
 import { componentTagger } from "lovable-tagger";
 import { VitePWA } from "vite-plugin-pwa";
 
-// https://vitejs.dev/config/
 export default defineConfig(({ mode }) => ({
   server: {
     host: "::",
@@ -15,7 +14,7 @@ export default defineConfig(({ mode }) => ({
     mode === "development" && componentTagger(),
     VitePWA({
       registerType: "autoUpdate",
-      includeAssets: ["favicon.ico", "placeholder.svg"],
+      // SUPPRIMEZ includeAssets pour éviter doublons
       manifest: {
         name: "EasyGest BP",
         short_name: "EasyGest",
@@ -23,21 +22,13 @@ export default defineConfig(({ mode }) => ({
         theme_color: "#D4A574",
         background_color: "#FDF8F3",
         display: "standalone",
-        orientation: "portrait",
+        orientation: "portrait-primary",  // ✅ CORRIGÉ
         scope: "/",
         start_url: "/",
         icons: [
-          {
-            src: "/favicon.ico",
-            sizes: "64x64",
-            type: "image/x-icon",
-          },
-          {
-            src: "/placeholder.svg",
-            sizes: "192x192",
-            type: "image/svg+xml",
-            purpose: "any maskable",
-          },
+            { src: "/icon.png", sizes: "512x512", type: "image/png" },
+            { src: "/icon.png", sizes: "512x512", type: "image/png", purpose: "maskable" },
+            { src: "/favicon.ico", sizes: "any", type: "image/x-icon" }
         ],
       },
       workbox: {
@@ -50,7 +41,7 @@ export default defineConfig(({ mode }) => ({
               cacheName: "google-fonts-cache",
               expiration: {
                 maxEntries: 10,
-                maxAgeSeconds: 60 * 60 * 24 * 365, // 1 year
+                maxAgeSeconds: 60 * 60 * 24 * 365,
               },
               cacheableResponse: {
                 statuses: [0, 200],

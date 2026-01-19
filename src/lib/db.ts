@@ -83,11 +83,13 @@ export interface Inventaire {
 export interface InventaireDetail {
   id?: number;
   local_id?: string;
-  inventaire_id: number;
+  inventaire_id?: number;  // ✅ Rendu optionnel avec ?
   inventaire_local_id?: string;
   produit_id: number;
   quantite_restante: number;
   sync_status: 'synced' | 'pending' | 'conflict';
+  created_at: string;
+  updated_at: string;
 }
 export interface SessionVente {
   id?: number;

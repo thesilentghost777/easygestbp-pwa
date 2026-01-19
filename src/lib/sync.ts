@@ -1,5 +1,5 @@
 /**
- * EasyGest BP - Service de Synchronisation
+ * EasyGest BP - Service de Synchronisation (CORRIGÉ)
  * Gère la sync bidirectionnelle entre IndexedDB et l'API Laravel
  */
 
@@ -136,6 +136,7 @@ export async function fullSync(): Promise<SyncResult> {
 
 /**
  * Push: Envoyer les modifications locales au serveur
+ * 🔥 CORRECTION MAJEURE: Envoi des détails d'inventaire en 2 passes
  */
 async function pushLocalChanges(): Promise<SyncResult> {
   const db = await getDB();
@@ -167,86 +168,114 @@ async function pushLocalChanges(): Promise<SyncResult> {
     }
     
     console.log(`📤 [push] Envoi de ${total} enregistrements...`);
+    console.log(`📊 [push] Détails: ${pendingInventaires.length} inventaires, ${pendingDetails.length} détails`);
     
-    // Envoyer au serveur
-    const response = await syncApi.push({
+    // 🔥 CORRECTION: Envoi en 2 PASSES
+    // PASSE 1: Envoyer UNIQUEMENT les inventaires (sans détails)
+    console.log('🔵 [push] PASSE 1: Envoi des inventaires seuls');
+    const pass1Response = await syncApi.push({
       receptions: pendingReceptions,
       retours: pendingRetours,
       inventaires: pendingInventaires,
-      inventaire_details: pendingDetails,
+      inventaire_details: [], // Vide pour l'instant
       sessions: pendingSessions,
     });
     
-    if (!response.success) {
-      // Si le serveur répond avec une erreur, marquer quand même comme synced si les données sont valides
-      console.warn('[push] Réponse serveur non-success:', response.message);
+    // 🔥 CORRECTION: Le backend peut retourner synced directement OU dans data
+    const synced1 = pass1Response.synced || [];
+    const conflicts1 = pass1Response.conflicts || [];
+    
+    console.log('📋 [push] Réponse PASSE 1:', {
+      success: pass1Response.success,
+      synced: synced1.length,
+      conflicts: conflicts1.length,
+      raw_response: pass1Response
+    });
+    
+    // Traiter les inventaires synchronisés
+    for (const inv of pendingInventaires) {
+      const syncedItem = synced1.find((s: any) => 
+        s.table === 'inventaires' && (s.local_id === inv.local_id || s.id === inv.id)
+      );
+      
+      if (syncedItem) {
+        const serverId = syncedItem.server_id || syncedItem.id;
+        console.log(`✅ [push] Inventaire trouvé dans synced`, {
+          local_id: inv.local_id,
+          old_id: inv.id,
+          server_id: serverId,
+          syncedItem
+        });
+        
+        inv.id = serverId;
+        inv.sync_status = 'synced';
+        inv.last_synced_at = new Date().toISOString();
+        await db.put('inventaires', inv);
+        syncedCount++;
+        
+        // 🔥 IMPORTANT: Mettre à jour TOUS les détails avec cet inventaire_id
+        const allDetails = await db.getAll('inventaire_details');
+        let detailsUpdated = 0;
+        
+        for (const detail of allDetails) {
+          if (detail.inventaire_local_id === inv.local_id) {
+            console.log(`🔗 [push] Liaison détail`, {
+              produit_id: detail.produit_id,
+              old_inventaire_local_id: detail.inventaire_local_id,
+              new_inventaire_id: serverId
+            });
+            
+            detail.inventaire_id = serverId;
+            detail.inventaire_local_id = undefined;
+            detail.sync_status = 'pending'; // Forcer re-sync
+            await db.put('inventaire_details', detail);
+            detailsUpdated++;
+          }
+        }
+        
+        console.log(`✅ [push] ${detailsUpdated} détails liés à l'inventaire ${serverId}`);
+      } else {
+        console.warn(`⚠️ [push] Inventaire non trouvé dans synced`, {
+          local_id: inv.local_id,
+          id: inv.id,
+          synced1_length: synced1.length
+        });
+      }
     }
     
-    const { synced = [], conflicts = [] } = response.data || {};
-    
-    // Si le serveur a répondu avec succès, marquer tous les enregistrements comme synchronisés
-    if (response.success || synced.length > 0) {
-      // Marquer les réceptions synchronisées
-      for (const rec of pendingReceptions) {
-        const syncedItem = synced.find((s: any) => 
-          s.table === 'receptions_pointeur' && (s.local_id === rec.local_id || s.id === rec.id)
-        );
-        
-        if (syncedItem) {
-          rec.id = syncedItem.server_id || syncedItem.id || rec.id;
-        }
+    // Traiter les autres entités (réceptions, retours, sessions)
+    for (const rec of pendingReceptions) {
+      const syncedItem = synced1.find((s: any) => 
+        s.table === 'receptions_pointeur' && (s.local_id === rec.local_id || s.id === rec.id)
+      );
+      if (syncedItem) {
+        rec.id = syncedItem.server_id || syncedItem.id || rec.id;
         rec.sync_status = 'synced';
         rec.last_synced_at = new Date().toISOString();
         await db.put('receptions_pointeur', rec);
         syncedCount++;
       }
-      
-      // Marquer les retours synchronisés
-      for (const ret of pendingRetours) {
-        const syncedItem = synced.find((s: any) => 
-          s.table === 'retours_produits' && (s.local_id === ret.local_id || s.id === ret.id)
-        );
-        
-        if (syncedItem) {
-          ret.id = syncedItem.server_id || syncedItem.id || ret.id;
-        }
+    }
+    
+    for (const ret of pendingRetours) {
+      const syncedItem = synced1.find((s: any) => 
+        s.table === 'retours_produits' && (s.local_id === ret.local_id || s.id === ret.id)
+      );
+      if (syncedItem) {
+        ret.id = syncedItem.server_id || syncedItem.id || ret.id;
         ret.sync_status = 'synced';
         ret.last_synced_at = new Date().toISOString();
         await db.put('retours_produits', ret);
         syncedCount++;
       }
-      
-      // Marquer les inventaires synchronisés
-      for (const inv of pendingInventaires) {
-        const syncedItem = synced.find((s: any) => 
-          s.table === 'inventaires' && (s.local_id === inv.local_id || s.id === inv.id)
-        );
-        
-        if (syncedItem) {
-          inv.id = syncedItem.server_id || syncedItem.id || inv.id;
-        }
-        inv.sync_status = 'synced';
-        inv.last_synced_at = new Date().toISOString();
-        await db.put('inventaires', inv);
-        syncedCount++;
-      }
-      
-      // Marquer les détails d'inventaire synchronisés
-      for (const det of pendingDetails) {
-        det.sync_status = 'synced';
-        await db.put('inventaire_details', det);
-        syncedCount++;
-      }
-      
-      // Marquer les sessions synchronisées
-      for (const sess of pendingSessions) {
-        const syncedItem = synced.find((s: any) => 
-          s.table === 'sessions_vente' && (s.local_id === sess.local_id || s.id === sess.id)
-        );
-        
-        if (syncedItem) {
-          sess.id = syncedItem.server_id || syncedItem.id || sess.id;
-        }
+    }
+    
+    for (const sess of pendingSessions) {
+      const syncedItem = synced1.find((s: any) => 
+        s.table === 'sessions_vente' && (s.local_id === sess.local_id || s.id === sess.id)
+      );
+      if (syncedItem) {
+        sess.id = syncedItem.server_id || syncedItem.id || sess.id;
         sess.sync_status = 'synced';
         sess.last_synced_at = new Date().toISOString();
         await db.put('sessions_vente', sess);
@@ -254,29 +283,99 @@ async function pushLocalChanges(): Promise<SyncResult> {
       }
     }
     
-    // Gérer les conflits
-    for (const conflict of conflicts) {
+    // 🔥 PASSE 2: Envoyer UNIQUEMENT les détails d'inventaire (maintenant liés)
+    const detailsToSend = await db.getAllFromIndex('inventaire_details', 'by-sync', 'pending');
+    
+    if (detailsToSend.length > 0) {
+      console.log(`🟢 [push] PASSE 2: Envoi de ${detailsToSend.length} détails d'inventaire`);
+      
+      // Vérifier que tous les détails ont un inventaire_id valide
+      const validDetails = detailsToSend.filter(d => d.inventaire_id !== undefined && d.inventaire_id !== null);
+      const invalidDetails = detailsToSend.filter(d => !d.inventaire_id);
+      
+      if (invalidDetails.length > 0) {
+        console.warn(`⚠️ [push] ${invalidDetails.length} détails sans inventaire_id seront ignorés`);
+        invalidDetails.forEach(d => {
+          console.warn(`  - Détail produit_id=${d.produit_id}, inventaire_local_id=${d.inventaire_local_id}`);
+        });
+      }
+      
+      console.log(`📤 [push] Envoi de ${validDetails.length} détails valides`);
+      validDetails.forEach(d => {
+        console.log(`  - Détail: inventaire_id=${d.inventaire_id}, produit_id=${d.produit_id}, qty=${d.quantite_restante}`);
+      });
+      
+      const pass2Response = await syncApi.push({
+        receptions: [],
+        retours: [],
+        inventaires: [],
+        inventaire_details: validDetails,
+        sessions: [],
+      });
+      
+      // 🔥 CORRECTION: Le backend retourne synced/conflicts à la racine de la réponse
+      const synced2 = pass2Response.synced || [];
+      const conflicts2 = pass2Response.conflicts || [];
+      
+      console.log('📋 [push] Réponse PASSE 2:', {
+        success: pass2Response.success,
+        confirmed: pass2Response.confirmed,
+        synced: synced2.length,
+        conflicts: conflicts2.length,
+        synced_items: synced2
+      });
+      
+      // Traiter les détails synchronisés
+      for (const det of validDetails) {
+        const syncedItem = synced2.find((s: any) => 
+          s.table === 'inventaire_details' && 
+          (s.id === det.id || (s.server_id && s.server_id === det.id))
+        );
+        
+        if (syncedItem) {
+          console.log(`✅ [push] Détail produit_id=${det.produit_id} synchronisé`);
+          det.id = syncedItem.server_id || syncedItem.id || det.id;
+          det.sync_status = 'synced';
+          await db.put('inventaire_details', det);
+          syncedCount++;
+        } else {
+          // Vérifier si c'est un conflit
+          const isConflict = conflicts2.some((c: any) => 
+            c.table === 'inventaire_details' && c.id === det.id
+          );
+          
+          if (!isConflict && pass2Response.success) {
+            // Pas de conflit et réponse succès = considérer comme synchronisé
+            console.log(`✅ [push] Détail produit_id=${det.produit_id} marqué synced (succès global)`);
+            det.sync_status = 'synced';
+            await db.put('inventaire_details', det);
+            syncedCount++;
+          } else if (isConflict) {
+            console.warn(`⚠️ [push] Conflit sur détail produit_id=${det.produit_id}`);
+            conflictsCount++;
+          }
+        }
+      }
+      
+      // Gérer les conflits de la passe 2
+      for (const conflict of conflicts2) {
+        const { table, id, reason } = conflict;
+        errors.push(`Conflit ${table} #${id}: ${reason}`);
+        console.error(`❌ [push] Conflit: ${table} #${id} - ${reason}`);
+      }
+    } else {
+      console.log('ℹ️ [push] Aucun détail d\'inventaire à synchroniser');
+    }
+    
+    // Gérer les conflits de la passe 1
+    for (const conflict of conflicts1) {
       const { table, id, local_id, reason } = conflict;
       errors.push(`Conflit ${table} #${id || local_id}: ${reason}`);
       conflictsCount++;
-      
-      // Marquer comme conflit dans la DB locale
-      if (table === 'receptions_pointeur') {
-        const rec = pendingReceptions.find(r => r.local_id === local_id || r.id === id);
-        if (rec) {
-          rec.sync_status = 'conflict';
-          await db.put('receptions_pointeur', rec);
-        }
-      } else if (table === 'retours_produits') {
-        const ret = pendingRetours.find(r => r.local_id === local_id || r.id === id);
-        if (ret) {
-          ret.sync_status = 'conflict';
-          await db.put('retours_produits', ret);
-        }
-      }
+      console.error(`❌ [push] Conflit: ${table} #${id || local_id} - ${reason}`);
     }
     
-    console.log(`✅ [push] ${syncedCount} enregistrements synchronisés`);
+    console.log(`✅ [push] Total: ${syncedCount} enregistrements synchronisés, ${conflictsCount} conflits`);
     
     return {
       success: true,
@@ -326,7 +425,7 @@ async function pullServerData(): Promise<SyncResult> {
     
     const data = response.data?.data || response.data || {};
     
-    // Mise à jour des utilisateurs (inclure l'utilisateur actuel)
+    // Mise à jour des utilisateurs
     if (data.users && Array.isArray(data.users)) {
       for (const user of data.users) {
         await db.put('users', {
@@ -336,13 +435,6 @@ async function pullServerData(): Promise<SyncResult> {
         });
         syncedCount++;
       }
-      
-      // S'assurer que l'utilisateur actuel est bien dans la liste
-      if (currentUser && !data.users.find((u: any) => u.id === currentUser.id)) {
-        // L'utilisateur actuel n'est pas dans la liste retournée, on garde son enregistrement local
-        console.log(`⚠️ [pull] Utilisateur actuel (${currentUser.id}) non inclus dans la sync, conservation locale`);
-      }
-      
       console.log(`✅ [pull] ${data.users.length} utilisateurs mis à jour`);
     }
     
@@ -372,7 +464,7 @@ async function pullServerData(): Promise<SyncResult> {
       console.log(`✅ [pull] ${data.vendeurs_actifs.length} vendeurs actifs mis à jour`);
     }
     
-    // Mise à jour des réceptions (ne pas écraser les pending locaux)
+    // Mise à jour des réceptions
     if (data.receptions_pointeur && Array.isArray(data.receptions_pointeur)) {
       for (const rec of data.receptions_pointeur) {
         const existing = await db.get('receptions_pointeur', rec.id);
@@ -404,7 +496,7 @@ async function pullServerData(): Promise<SyncResult> {
       console.log(`✅ [pull] ${data.retours_produits.length} retours mis à jour`);
     }
     
-    // Mise à jour des sessions de vente
+    // Mise à jour des sessions
     if (data.sessions_vente && Array.isArray(data.sessions_vente)) {
       for (const sess of data.sessions_vente) {
         const existing = await db.get('sessions_vente', sess.id);
@@ -467,7 +559,6 @@ async function pullServerData(): Promise<SyncResult> {
 export async function getSyncStatus(): Promise<SyncStatus> {
   const db = await getDB();
   
-  // Compter les enregistrements en attente
   const pendingReceptions = await db.countFromIndex('receptions_pointeur', 'by-sync', 'pending');
   const pendingRetours = await db.countFromIndex('retours_produits', 'by-sync', 'pending');
   const pendingInventaires = await db.countFromIndex('inventaires', 'by-sync', 'pending');
@@ -502,7 +593,6 @@ export async function autoSyncOnDashboard(): Promise<SyncResult | null> {
     return fullSync();
   }
   
-  // Faire un pull même sans données en attente (pour récupérer les MAJ serveur)
   return fullSync();
 }
 

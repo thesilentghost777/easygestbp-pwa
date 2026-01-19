@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
 import { useSync } from '@/contexts/SyncContext';
@@ -30,7 +30,8 @@ import {
   AlertTriangle,
   Edit2,
   X,
-  Trash2
+  Trash2,
+  WifiOff
 } from 'lucide-react';
 import { getDB, generateLocalId, type Produit, type User as DBUser, type ReceptionPointeur, type RetourProduit } from '@/lib/db';
 import { autoSyncOnDashboard } from '@/lib/sync';
@@ -43,6 +44,10 @@ interface EditModalState {
   type: 'reception' | 'retour' | null;
   item: ReceptionPointeur | RetourProduit | null;
 }
+interface ChangeSellerModalState {
+  isOpen: boolean;
+  category: 'boulangerie' | 'patisserie' | null;
+}
 export default function PointeurDashboard() {
   const navigate = useNavigate();
   const { user } = useAuth();
@@ -51,6 +56,7 @@ export default function PointeurDashboard() {
   const [showDbViewer, setShowDbViewer] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [isOffline, setIsOffline] = useState(!navigator.onLine);
   // Données
   const [produits, setProduits] = useState<Produit[]>([]);
   const [producteurs, setProducteurs] = useState<DBUser[]>([]);
@@ -84,67 +90,135 @@ export default function PointeurDashboard() {
     raison: 'perime' as 'perime' | 'abime' | 'autre',
     description: '',
   });
+  // Modal changement vendeur
+  const [changeSellerModal, setChangeSellerModal] = useState<ChangeSellerModalState>({
+    isOpen: false,
+    category: null,
+  });
+  const [selectedNewSeller, setSelectedNewSeller] = useState<number | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  // contrôle visuel du bandeau offline (séparé de isOffline)
+  const [showOfflineBannerVisible, setShowOfflineBannerVisible] = useState(false);
+  const offlineDismissTimerRef = useRef<number | null>(null);
+  const hasTouchedRef = useRef(false);
+  // protège loadData de double exécution
+  const loadDataRunningRef = useRef<Promise<void> | null>(null);
+  const initializedRef = useRef(false);
+  useEffect(() => {
+    const handleOnline = () => setIsOffline(false);
+    const handleOffline = () => setIsOffline(true);
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, []);
+  // Synchroniser visibilité du bandeau quand isOffline change
+  useEffect(() => {
+    if (isOffline) {
+      setShowOfflineBannerVisible(true);
+      hasTouchedRef.current = false; // prêt à capter la première interaction
+    } else {
+      // quand on redevient online, masquer immédiatement le bandeau
+      setShowOfflineBannerVisible(false);
+      if (offlineDismissTimerRef.current) {
+        window.clearTimeout(offlineDismissTimerRef.current);
+        offlineDismissTimerRef.current = null;
+      }
+    }
+  }, [isOffline]);
+  // Sur la première interaction utilisateur (touch/click) lancer un timer de 10s qui ferme le bandeau
+  useEffect(() => {
+    if (!isOffline) return;
+    const onFirstInteraction = () => {
+      if (hasTouchedRef.current) return;
+      hasTouchedRef.current = true;
+      if (offlineDismissTimerRef.current) window.clearTimeout(offlineDismissTimerRef.current);
+      offlineDismissTimerRef.current = window.setTimeout(() => {
+        setShowOfflineBannerVisible(false);
+        offlineDismissTimerRef.current = null;
+      }, 10000); // 10s
+    };
+    window.addEventListener('touchstart', onFirstInteraction, { passive: true });
+    window.addEventListener('click', onFirstInteraction);
+    return () => {
+      window.removeEventListener('touchstart', onFirstInteraction);
+      window.removeEventListener('click', onFirstInteraction);
+      if (offlineDismissTimerRef.current) {
+        window.clearTimeout(offlineDismissTimerRef.current);
+        offlineDismissTimerRef.current = null;
+      }
+    };
+  }, [isOffline]);
   // Fonction pour charger les données depuis IndexedDB
   const loadData = useCallback(async (showLoader = true) => {
-    if (showLoader) {
-      setIsLoading(true);
-    } else {
-      setIsRefreshing(true);
+    // si une exécution est en cours, retourne la même promesse (évite double exécution)
+    if (loadDataRunningRef.current) {
+      return loadDataRunningRef.current;
     }
-    try {
-      console.log('🔄 [PointeurDashboard] Chargement des données...');
-      const db = await getDB();
-      // Charger produits actifs
-      const allProduits = await db.getAll('produits');
-      setProduits(allProduits.filter(p => p.actif));
-      // Charger utilisateurs
-      const allUsers = await db.getAll('users');
-      setProducteurs(allUsers.filter(u => u.role === 'producteur' && u.actif));
-      setVendeurs(allUsers.filter(u =>
-        (u.role === 'vendeur_boulangerie' || u.role === 'vendeur_patisserie') && u.actif
-      ));
-      // Charger vendeurs actifs
-      const vendeursActifs = await db.getAll('vendeurs_actifs');
-      const vendeurBoulangerie = vendeursActifs.find(v => v.categorie === 'boulangerie');
-      const vendeurPatisserie = vendeursActifs.find(v => v.categorie === 'patisserie');
-      const newVendeurActif: { boulangerie?: DBUser; patisserie?: DBUser } = {};
-      if (vendeurBoulangerie?.vendeur_id) {
-        const vb = allUsers.find(u => u.id === vendeurBoulangerie.vendeur_id);
-        if (vb) newVendeurActif.boulangerie = vb;
-      }
-      if (vendeurPatisserie?.vendeur_id) {
-        const vp = allUsers.find(u => u.id === vendeurPatisserie.vendeur_id);
-        if (vp) newVendeurActif.patisserie = vp;
-      }
-      setVendeurActif(newVendeurActif);
-      // Charger mes réceptions et retours
-      if (user) {
-        const allReceptions = await db.getAllFromIndex('receptions_pointeur', 'by-pointeur', user.id);
-        setReceptions(allReceptions.sort((a, b) =>
-          new Date(b.date_reception).getTime() - new Date(a.date_reception).getTime()
-        ));
-        const allRetours = await db.getAllFromIndex('retours_produits', 'by-pointeur', user.id);
-        setRetours(allRetours.sort((a, b) =>
-          new Date(b.date_retour).getTime() - new Date(a.date_retour).getTime()
-        ));
-      }
-   
-      console.log('✅ [PointeurDashboard] Données chargées avec succès');
-    } catch (error) {
-      console.error('❌ [PointeurDashboard] Erreur chargement données:', error);
-      toast.error('Erreur lors du chargement des données');
-    } finally {
+    const runner = (async () => {
       if (showLoader) {
-        setIsLoading(false);
+        setIsLoading(true);
       } else {
-        setIsRefreshing(false);
+        setIsRefreshing(true);
       }
+      try {
+        console.log('🔄 [PointeurDashboard] Chargement des données...');
+        const db = await getDB();
+        const allProduits = await db.getAll('produits');
+        setProduits(allProduits.filter(p => p.actif));
+        const allUsers = await db.getAll('users');
+        setProducteurs(allUsers.filter(u => u.role === 'producteur' && u.actif));
+        setVendeurs(allUsers.filter(u =>
+          (u.role === 'vendeur_boulangerie' || u.role === 'vendeur_patisserie') && u.actif
+        ));
+        const vendeursActifs = await db.getAll('vendeurs_actifs');
+        const vendeurBoulangerie = vendeursActifs.find(v => v.categorie === 'boulangerie');
+        const vendeurPatisserie = vendeursActifs.find(v => v.categorie === 'patisserie');
+        const newVendeurActif: { boulangerie?: DBUser; patisserie?: DBUser } = {};
+        if (vendeurBoulangerie?.vendeur_id) {
+          const vb = allUsers.find(u => u.id === vendeurBoulangerie.vendeur_id);
+          if (vb) newVendeurActif.boulangerie = vb;
+        }
+        if (vendeurPatisserie?.vendeur_id) {
+          const vp = allUsers.find(u => u.id === vendeurPatisserie.vendeur_id);
+          if (vp) newVendeurActif.patisserie = vp;
+        }
+        setVendeurActif(newVendeurActif);
+        if (user) {
+          const allReceptions = await db.getAllFromIndex('receptions_pointeur', 'by-pointeur', user.id);
+          setReceptions(allReceptions.sort((a, b) =>
+            new Date(b.date_reception).getTime() - new Date(a.date_reception).getTime()
+          ));
+          const allRetours = await db.getAllFromIndex('retours_produits', 'by-pointeur', user.id);
+          setRetours(allRetours.sort((a, b) =>
+            new Date(b.date_retour).getTime() - new Date(a.date_retour).getTime()
+          ));
+        }
+        console.log('✅ [PointeurDashboard] Données chargées avec succès');
+      } catch (error) {
+        console.error('❌ [PointeurDashboard] Erreur chargement données:', error);
+        toast.error('Erreur lors du chargement des données');
+      } finally {
+        if (showLoader) {
+          setIsLoading(false);
+        } else {
+          setIsRefreshing(false);
+        }
+      }
+    })();
+    loadDataRunningRef.current = runner;
+    try {
+      await runner;
+    } finally {
+      loadDataRunningRef.current = null;
     }
   }, [user]);
-  // Charger les données au montage avec sync initiale
   useEffect(() => {
     const initDashboard = async () => {
+      if (initializedRef.current) return;
+      initializedRef.current = true;
       setIsLoading(true);
       try {
         console.log('🚀 [PointeurDashboard] Initialisation du dashboard...');
@@ -157,11 +231,10 @@ export default function PointeurDashboard() {
     };
     initDashboard();
   }, [loadData]);
-  // Écouter les événements de synchronisation globale
   useEffect(() => {
     const handleSyncComplete = async () => {
       console.log('✅ [PointeurDashboard] Synchronisation terminée, rechargement des données...');
-      await loadData(false); // Recharger sans loader pour une transition douce
+      await loadData(false);
     };
     const handleSyncStart = () => {
       console.log('🔄 [PointeurDashboard] Synchronisation démarrée...');
@@ -171,25 +244,58 @@ export default function PointeurDashboard() {
       console.log('❌ [PointeurDashboard] Erreur de synchronisation');
       setIsRefreshing(false);
     };
-    // S'abonner aux événements
     window.addEventListener('global-sync-complete', handleSyncComplete);
     window.addEventListener('global-sync-start', handleSyncStart);
     window.addEventListener('global-sync-error', handleSyncError);
-    // Nettoyage
     return () => {
       window.removeEventListener('global-sync-complete', handleSyncComplete);
       window.removeEventListener('global-sync-start', handleSyncStart);
       window.removeEventListener('global-sync-error', handleSyncError);
     };
   }, [loadData]);
-  // Trouver le vendeur assigné pour un produit
+  useEffect(() => {
+    if (changeSellerModal.isOpen && changeSellerModal.category) {
+      setSelectedNewSeller(vendeurActif[changeSellerModal.category]?.id || null);
+    }
+  }, [changeSellerModal.isOpen, changeSellerModal.category, vendeurActif]);
   const getVendeurAssigne = (produitId: number | null) => {
     if (!produitId) return null;
     const produit = produits.find(p => p.id === produitId);
     if (!produit) return null;
     return produit.categorie === 'boulangerie' ? vendeurActif.boulangerie : vendeurActif.patisserie;
   };
-  // Soumettre une réception
+  const updateActiveSeller = useCallback(async (category: 'boulangerie' | 'patisserie', newVendeurId: number) => {
+    try {
+      const db = await getDB();
+      const tx = db.transaction('vendeurs_actifs', 'readwrite');
+      const store = tx.objectStore('vendeurs_actifs');
+      const existing = await store.getAll();
+      let record = existing.find(v => v.categorie === category);
+      const now = new Date().toISOString();
+      if (record) {
+        record.vendeur_id = newVendeurId;
+        record.sync_status = 'pending';
+        record.updated_at = now;
+        await store.put(record);
+      } else {
+        const id = category === 'boulangerie' ? 1 : 2;
+        record = {
+          id,
+          categorie: category,
+          vendeur_id: newVendeurId,
+          sync_status: 'pending',
+          created_at: now,
+          updated_at: now,
+        };
+        await store.add(record);
+      }
+      await tx.done;
+      toast.success('Vendeur actif mis à jour localement');
+    } catch (error) {
+      console.error('Erreur mise à jour vendeur actif:', error);
+      toast.error('Erreur lors de la mise à jour du vendeur');
+    }
+  }, []);
   const handleSubmitReception = async () => {
     if (!receptionForm.produit_id || receptionForm.quantite <= 0 || !user) {
       toast.error('Veuillez remplir tous les champs obligatoires');
@@ -219,12 +325,10 @@ export default function PointeurDashboard() {
         updated_at: now,
       };
       await db.add('receptions_pointeur', reception);
-      // Rafraîchir la liste
       const allReceptions = await db.getAllFromIndex('receptions_pointeur', 'by-pointeur', user.id);
       setReceptions(allReceptions.sort((a, b) =>
         new Date(b.date_reception).getTime() - new Date(a.date_reception).getTime()
       ));
-      // Reset formulaire
       setReceptionForm({
         producteur_id: 1,
         produit_id: null,
@@ -241,7 +345,6 @@ export default function PointeurDashboard() {
       setIsSubmitting(false);
     }
   };
-  // Soumettre un retour
   const handleSubmitRetour = async () => {
     if (!retourForm.produit_id || retourForm.quantite <= 0 || !user) {
       toast.error('Veuillez remplir tous les champs obligatoires');
@@ -271,12 +374,10 @@ export default function PointeurDashboard() {
         updated_at: now,
       };
       await db.add('retours_produits', retour);
-      // Rafraîchir la liste
       const allRetours = await db.getAllFromIndex('retours_produits', 'by-pointeur', user.id);
       setRetours(allRetours.sort((a, b) =>
         new Date(b.date_retour).getTime() - new Date(a.date_retour).getTime()
       ));
-      // Reset formulaire
       setRetourForm({
         produit_id: null,
         quantite: 0,
@@ -293,7 +394,6 @@ export default function PointeurDashboard() {
       setIsSubmitting(false);
     }
   };
-  // Ouvrir le modal d'édition
   const openEditModal = (type: 'reception' | 'retour', item: ReceptionPointeur | RetourProduit) => {
     if (item.verrou) {
       toast.error('Cet enregistrement est verrouillé par le PDG');
@@ -318,7 +418,6 @@ export default function PointeurDashboard() {
       });
     }
   };
-  // Sauvegarder les modifications
   const handleSaveEdit = async () => {
     if (!editModal.item || !user) return;
     setIsSubmitting(true);
@@ -335,7 +434,6 @@ export default function PointeurDashboard() {
           updated_at: now,
         };
         await db.put('receptions_pointeur', updated);
-        // Rafraîchir
         const allReceptions = await db.getAllFromIndex('receptions_pointeur', 'by-pointeur', user.id);
         setReceptions(allReceptions.sort((a, b) =>
           new Date(b.date_reception).getTime() - new Date(a.date_reception).getTime()
@@ -351,7 +449,6 @@ export default function PointeurDashboard() {
           updated_at: now,
         };
         await db.put('retours_produits', updated);
-        // Rafraîchir
         const allRetours = await db.getAllFromIndex('retours_produits', 'by-pointeur', user.id);
         setRetours(allRetours.sort((a, b) =>
           new Date(b.date_retour).getTime() - new Date(a.date_retour).getTime()
@@ -362,6 +459,20 @@ export default function PointeurDashboard() {
     } catch (error) {
       console.error('Erreur modification:', error);
       toast.error('Erreur lors de la modification');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+  const handleSaveChangeSeller = async () => {
+    if (!changeSellerModal.category || !selectedNewSeller) return;
+    setIsSubmitting(true);
+    try {
+      await updateActiveSeller(changeSellerModal.category, selectedNewSeller);
+      await loadData(false);
+      setChangeSellerModal({ isOpen: false, category: null });
+      setSelectedNewSeller(null);
+    } catch (error) {
+      toast.error('Erreur lors de la mise à jour');
     } finally {
       setIsSubmitting(false);
     }
@@ -381,52 +492,86 @@ export default function PointeurDashboard() {
     { id: 'mes-receptions' as const, icon: Check, label: 'Mes Réceptions' },
     { id: 'mes-retours' as const, icon: AlertTriangle, label: 'Mes Retours' },
   ];
+  const headerHeight = 73;
+  const offlineBannerHeight = 48;
+  const navHeight = 56;
+ 
+  // La navigation doit TOUJOURS être visible, donc on calcule son top dynamiquement
+  const navTop = (isOffline && showOfflineBannerVisible) ? headerHeight + offlineBannerHeight : headerHeight;
+  // réduire l'espace vertical entre nav et contenu de 3/4 (donc garder 25%)
+  const contentPaddingTop = navTop + Math.round((navHeight + 8) * 0.25);
+ 
   return (
     <div className="min-h-screen bg-background">
+      {/* Header fixe en haut */}
       <Header
         title="Tableau de bord Pointeur"
         onViewDatabase={() => setShowDbViewer(true)}
       />
-      {/* Indicateur de rafraîchissement subtil */}
+      {/* Indicateur de rafraîchissement */}
       {isRefreshing && (
-        <div className="fixed top-20 right-4 z-50 animate-fade-in">
-          <div className="bg-primary/10 border border-primary/20 rounded-lg px-3 py-2 flex items-center gap-2">
+        <div
+          className="fixed right-4 z-40 animate-fade-in"
+          style={{ top: `${headerHeight + 8}px` }}
+        >
+          <div className="bg-primary/10 border border-primary/20 rounded-lg px-3 py-2 flex items-center gap-2 shadow-sm">
             <Loader2 className="w-4 h-4 animate-spin text-primary" />
             <span className="text-sm text-primary font-medium">Mise à jour...</span>
           </div>
         </div>
       )}
-      {/* Navigation tabs */}
-      <div className="px-4 py-3 border-b bg-card/50 sticky top-[73px] z-40">
-        <div className="flex gap-2 overflow-x-auto pb-1">
-          {tabs.map((tab) => (
-            <button
-              key={tab.id}
-              onClick={() => setActiveTab(tab.id)}
-              className={`nav-icon flex-row px-4 py-2 ${activeTab === tab.id ? 'nav-icon-active' : ''}`}
-            >
-              <tab.icon className="w-5 h-5" />
-              <span className="text-sm font-medium whitespace-nowrap">{tab.label}</span>
-            </button>
-          ))}
-        </div>
-      </div>
-      {/* Contenu principal */}
-      <main className="p-4 pb-24 max-w-4xl mx-auto">
+      
+      <nav
+  className="fixed left-0 right-0 bg-background/95 backdrop-blur-md border-b border-border transition-all duration-300"
+  style={{
+    top: `${navTop}px`,
+    zIndex: 150,
+  }}
+>
+  <div className="px-4 py-2 max-w-4xl mx-auto"> {/* ← réduit : py-3 → py-2 */}
+    <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-thin scrollbar-thumb-muted-foreground/30">
+      {tabs.map((tab) => (
+        <button
+          key={tab.id}
+          onClick={() => setActiveTab(tab.id)}
+          className={`
+            flex items-center gap-2
+            px-5 py-1.5 rounded-lg {/* ← un peu plus compact que py-2 */}
+            text-sm font-medium
+            whitespace-nowrap
+            transition-all duration-200
+            ${activeTab === tab.id
+              ? 'bg-primary text-primary-foreground shadow-sm'
+              : 'text-muted-foreground hover:bg-muted/70 hover:text-foreground'
+            }
+          `}
+        >
+          <tab.icon className="w-5 h-5" />
+          <span>{tab.label}</span>
+        </button>
+      ))}
+    </div>
+  </div>
+</nav>
+{/* Contenu principal */}
+<main
+  className="pb-24 px-4 max-w-4xl mx-auto transition-all duration-300"
+  style={{
+    paddingTop: `${contentPaddingTop}px`,
+  }}
+>
         {isLoading ? (
           <div className="flex items-center justify-center py-20">
             <Loader2 className="w-8 h-8 animate-spin text-primary" />
           </div>
         ) : (
           <>
-            {/* Tab Réception */}
             {activeTab === 'reception' && (
               <div className="space-y-6 animate-fade-in">
                 <div className="card-premium p-6">
                   <h2 className="font-display text-xl font-semibold mb-6">
                     Nouvelle réception
                   </h2>
-                  {/* Producteur */}
                   <div className="space-y-2 mb-4">
                     <Label>Producteur</Label>
                     <SearchableSelect
@@ -443,7 +588,6 @@ export default function PointeurDashboard() {
                       placeholder="Sélectionner un producteur"
                     />
                   </div>
-                  {/* Produit */}
                   <div className="space-y-2 mb-4">
                     <Label>Produit *</Label>
                     <SearchableSelect
@@ -457,7 +601,6 @@ export default function PointeurDashboard() {
                       placeholder="Rechercher un produit..."
                     />
                   </div>
-                  {/* Quantité */}
                   <div className="space-y-2 mb-4">
                     <Label>Quantité *</Label>
                     <NumericInput
@@ -468,7 +611,6 @@ export default function PointeurDashboard() {
                       size="lg"
                     />
                   </div>
-                  {/* Notes */}
                   <div className="space-y-2 mb-6">
                     <Label>Notes (optionnel)</Label>
                     <Textarea
@@ -479,7 +621,6 @@ export default function PointeurDashboard() {
                       rows={2}
                     />
                   </div>
-                  {/* Vendeur assigné */}
                   {vendeurAssigneReception && selectedProduitReception && (
                     <div className="p-4 rounded-lg bg-success/10 border border-success/30 mb-6 animate-scale-in">
                       <div className="flex items-center gap-3">
@@ -491,6 +632,13 @@ export default function PointeurDashboard() {
                           <p className="font-semibold">{vendeurAssigneReception.name}</p>
                         </div>
                         <CategoryBadge category={selectedProduitReception.categorie} size="md" />
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setChangeSellerModal({ isOpen: true, category: selectedProduitReception.categorie })}
+                        >
+                          Changer
+                        </Button>
                       </div>
                     </div>
                   )}
@@ -514,14 +662,12 @@ export default function PointeurDashboard() {
                 </div>
               </div>
             )}
-            {/* Tab Retour */}
             {activeTab === 'retour' && (
               <div className="space-y-6 animate-fade-in">
                 <div className="card-premium p-6">
                   <h2 className="font-display text-xl font-semibold mb-6">
                     Enregistrer un retour
                   </h2>
-                  {/* Produit */}
                   <div className="space-y-2 mb-4">
                     <Label>Produit *</Label>
                     <SearchableSelect
@@ -535,7 +681,6 @@ export default function PointeurDashboard() {
                       placeholder="Rechercher un produit..."
                     />
                   </div>
-                  {/* Quantité */}
                   <div className="space-y-2 mb-4">
                     <Label>Quantité *</Label>
                     <NumericInput
@@ -546,7 +691,6 @@ export default function PointeurDashboard() {
                       size="lg"
                     />
                   </div>
-                  {/* Raison */}
                   <div className="space-y-2 mb-4">
                     <Label>Raison du retour *</Label>
                     <div className="grid grid-cols-3 gap-2">
@@ -566,7 +710,6 @@ export default function PointeurDashboard() {
                       ))}
                     </div>
                   </div>
-                  {/* Description */}
                   <div className="space-y-2 mb-6">
                     <Label>Description (optionnel)</Label>
                     <Textarea
@@ -577,7 +720,6 @@ export default function PointeurDashboard() {
                       rows={2}
                     />
                   </div>
-                  {/* Vendeur assigné */}
                   {vendeurAssigneRetour && selectedProduitRetour && (
                     <div className="p-4 rounded-lg bg-success/10 border border-success/30 mb-6 animate-scale-in">
                       <div className="flex items-center gap-3">
@@ -589,6 +731,13 @@ export default function PointeurDashboard() {
                           <p className="font-semibold">{vendeurAssigneRetour.name}</p>
                         </div>
                         <CategoryBadge category={selectedProduitRetour.categorie} size="md" />
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setChangeSellerModal({ isOpen: true, category: selectedProduitRetour.categorie })}
+                        >
+                          Changer
+                        </Button>
                       </div>
                     </div>
                   )}
@@ -612,7 +761,6 @@ export default function PointeurDashboard() {
                 </div>
               </div>
             )}
-            {/* Tab Mes Réceptions */}
             {activeTab === 'mes-receptions' && (
               <div className="space-y-4 animate-fade-in">
                 <div className="flex items-center justify-between">
@@ -633,6 +781,7 @@ export default function PointeurDashboard() {
                   <div className="space-y-3">
                     {receptions.map((rec) => {
                       const produit = produits.find(p => p.id === rec.produit_id);
+                      const vendeur = vendeurs.find(v => v.id === rec.vendeur_assigne_id);
                       return (
                         <div
                           key={rec.id || rec.local_id}
@@ -642,13 +791,22 @@ export default function PointeurDashboard() {
                           <div className="flex items-start justify-between gap-3">
                             <div className="flex-1 min-w-0">
                               <div className="flex items-center gap-2 mb-1">
-                                <span className="font-medium truncate">
-                                  {produit?.nom || `Produit #${rec.produit_id}`}
-                                </span>
-                                {produit && <CategoryBadge category={produit.categorie} />}
+                                <div className="flex items-center gap-2">
+                                  <span className="font-medium truncate">
+                                    {produit?.nom || `Produit #${rec.produit_id}`}
+                                  </span>
+                                  {produit?.prix != null && (
+                                    <span className="text-sm text-muted-foreground ml-2">{produit.prix} XAF</span>
+                                  )}
+                                  {produit && <CategoryBadge category={produit.categorie} />}
+                                </div>
                               </div>
                               <div className="flex items-center gap-3 text-sm text-muted-foreground">
                                 <span className="font-semibold text-foreground">{rec.quantite} unités</span>
+                                <span className="flex items-center gap-1">
+                                  <User className="w-3 h-3" />
+                                  {vendeur?.name || 'Inconnu'}
+                                </span>
                                 <span className="flex items-center gap-1">
                                   <Clock className="w-3 h-3" />
                                   {format(new Date(rec.date_reception), 'HH:mm', { locale: fr })}
@@ -674,7 +832,6 @@ export default function PointeurDashboard() {
                 )}
               </div>
             )}
-            {/* Tab Mes Retours */}
             {activeTab === 'mes-retours' && (
               <div className="space-y-4 animate-fade-in">
                 <div className="flex items-center justify-between">
@@ -705,9 +862,15 @@ export default function PointeurDashboard() {
                           <div className="flex items-start justify-between gap-3">
                             <div className="flex-1 min-w-0">
                               <div className="flex items-center gap-2 mb-1">
-                                <span className="font-medium truncate">
-                                  {produit?.nom || `Produit #${ret.produit_id}`}
-                                </span>
+                                <div className="flex items-center gap-2">
+                                  <span className="font-medium truncate">
+                                    {produit?.nom || `Produit #${ret.produit_id}`}
+                                  </span>
+                                  {produit?.prix != null && (
+                                    <span className="text-sm text-muted-foreground ml-2">{produit.prix} XAF</span>
+                                  )}
+                                  {produit && <CategoryBadge category={produit.categorie} />}
+                                </div>
                                 <span className="text-xs px-2 py-0.5 rounded-full bg-warning/10 text-warning">
                                   {raisonLabels[ret.raison]}
                                 </span>
@@ -755,7 +918,6 @@ export default function PointeurDashboard() {
             </DialogTitle>
           </DialogHeader>
           <div className="space-y-4 py-4">
-            {/* Quantité */}
             <div className="space-y-2">
               <Label>Quantité</Label>
               <NumericInput
@@ -821,6 +983,53 @@ export default function PointeurDashboard() {
             <Button
               onClick={handleSaveEdit}
               disabled={isSubmitting || editForm.quantite <= 0}
+              className="btn-golden"
+            >
+              {isSubmitting ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                'Enregistrer'
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      {/* Modal changement vendeur */}
+      <Dialog open={changeSellerModal.isOpen} onOpenChange={(open) => !open && setChangeSellerModal({ isOpen: false, category: null })}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>
+              Changer le vendeur actif pour {changeSellerModal.category}
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            <div className="space-y-2">
+              <Label>Nouveau vendeur</Label>
+              <SearchableSelect
+                options={vendeurs
+                  .filter(u => u.role === `vendeur_${changeSellerModal.category}`)
+                  .map(u => ({
+                    value: u.id,
+                    label: u.name,
+                    description: u.numero_telephone,
+                  }))
+                }
+                value={selectedNewSeller}
+                onChange={(v) => setSelectedNewSeller(v as number)}
+                placeholder="Sélectionner un vendeur..."
+              />
+            </div>
+          </div>
+          <DialogFooter className="gap-2">
+            <Button
+              variant="outline"
+              onClick={() => setChangeSellerModal({ isOpen: false, category: null })}
+            >
+              Annuler
+            </Button>
+            <Button
+              onClick={handleSaveChangeSeller}
+              disabled={isSubmitting || !selectedNewSeller || selectedNewSeller === (vendeurActif[changeSellerModal.category]?.id || null)}
               className="btn-golden"
             >
               {isSubmitting ? (

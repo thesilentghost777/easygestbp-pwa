@@ -1,5 +1,6 @@
 /**
- * EasyGest BP - État vide stylisé
+ * EasyGest BP - Empty State Component
+ * Beautiful empty state with icon and action
  */
 
 import React from 'react';
@@ -32,15 +33,34 @@ export function EmptyState({
   const Icon = icons[icon];
 
   return (
-    <div className={cn('empty-state', className)}>
-      <div className="w-20 h-20 mb-4 rounded-full bg-muted/50 flex items-center justify-center">
-        <Icon className="empty-state-icon w-10 h-10" />
-      </div>
-      <h3 className="text-lg font-medium text-foreground mb-1">{title}</h3>
-      {description && (
-        <p className="text-sm text-muted-foreground max-w-sm">{description}</p>
+    <div
+      className={cn(
+        'flex flex-col items-center justify-center py-16 px-6 text-center',
+        'animate-fade-in',
+        className
       )}
-      {action && <div className="mt-4">{action}</div>}
+    >
+      <div className="relative mb-6">
+        {/* Glow effect */}
+        <div className="absolute inset-0 bg-primary/10 rounded-full blur-2xl scale-150" />
+        
+        {/* Icon container */}
+        <div className="relative w-20 h-20 rounded-2xl bg-gradient-to-br from-muted to-secondary flex items-center justify-center shadow-lg">
+          <Icon className="w-10 h-10 text-muted-foreground/60" strokeWidth={1.5} />
+        </div>
+      </div>
+
+      <h3 className="font-display text-xl font-semibold text-foreground mb-2">
+        {title}
+      </h3>
+
+      {description && (
+        <p className="text-muted-foreground text-sm max-w-xs mb-6">
+          {description}
+        </p>
+      )}
+
+      {action && <div className="mt-2">{action}</div>}
     </div>
   );
 }

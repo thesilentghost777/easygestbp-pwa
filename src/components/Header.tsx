@@ -45,23 +45,23 @@ export function Header({ title, showSync = true, onViewDatabase }: HeaderProps) 
   return (
     <header className="header-glass px-4 py-3 safe-area-top">
       <div className="flex items-center justify-between gap-4">
-        {/* Titre et rôle */}
         <div className="flex-1 min-w-0">
-          <h1 className="font-display text-xl md:text-2xl font-semibold text-foreground truncate">
-            {title}
-          </h1>
-          {user && (
-            <div className="flex items-center gap-2 mt-1">
-              <span className="text-sm text-muted-foreground truncate">
-                {user.name}
-              </span>
-              <span className={getRoleBadge(user.role).class}>
-                {getRoleBadge(user.role).label}
-              </span>
-            </div>
-          )}
-        </div>
-
+  <h1 className="font-system text-xl md:text-2xl font-semibold italic text-foreground leading-tight">
+    {title}
+  </h1>
+  
+  {user && (
+    <div className="mt-1.5 flex items-center gap-3 text-sm">
+      <span className="font-medium text-foreground">
+        {user.name}
+      </span>
+      <div className="h-1 w-1 rounded-full bg-foreground/30" />
+      <span className="text-foreground/60 font-medium tracking-wide uppercase text-xs">
+        {getRoleBadge(user.role).label}
+      </span>
+    </div>
+  )}
+</div>
         {/* Actions */}
         <div className="flex items-center gap-2">
           {/* Indicateur de connexion */}

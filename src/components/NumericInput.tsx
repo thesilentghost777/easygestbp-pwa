@@ -1,5 +1,6 @@
 /**
- * EasyGest BP - Input numérique avec contrôles
+ * EasyGest BP - Numeric Input Component
+ * Elegant numeric input with increment/decrement controls
  */
 
 import React from 'react';
@@ -50,54 +51,75 @@ export function NumericInput({
     sm: {
       btn: 'w-8 h-8 text-base',
       input: 'w-14 h-8 text-sm',
+      icon: 'w-4 h-4',
     },
     md: {
-      btn: 'w-10 h-10 md:w-12 md:h-12 text-lg',
-      input: 'w-16 md:w-20 h-10 md:h-12 text-base md:text-lg',
+      btn: 'w-11 h-11 text-lg',
+      input: 'w-18 h-11 text-lg',
+      icon: 'w-5 h-5',
     },
     lg: {
-      btn: 'w-12 h-12 md:w-14 md:h-14 text-xl',
-      input: 'w-20 md:w-24 h-12 md:h-14 text-lg md:text-xl',
+      btn: 'w-14 h-14 text-xl',
+      input: 'w-24 h-14 text-2xl',
+      icon: 'w-6 h-6',
     },
   };
 
+  const sizeConfig = sizes[size];
+
   return (
-    <div className={cn('numeric-input-group', className)}>
+    <div className={cn('flex items-center gap-2', className)}>
       <button
         type="button"
         onClick={handleDecrement}
         disabled={disabled || value <= min}
-        className={cn('numeric-btn', sizes[size].btn)}
+        className={cn(
+          'flex items-center justify-center rounded-xl',
+          'bg-secondary text-secondary-foreground border border-border/50',
+          'transition-all duration-200',
+          'hover:bg-primary hover:text-primary-foreground hover:border-primary hover:shadow-md',
+          'active:scale-95',
+          'disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-secondary disabled:hover:text-secondary-foreground disabled:hover:border-border/50',
+          sizeConfig.btn
+        )}
         aria-label="Diminuer"
       >
-        <Minus className="w-5 h-5" />
+        <Minus className={sizeConfig.icon} />
       </button>
-      
+
       <input
-        type="number"
+        type="text"
         inputMode="numeric"
+        pattern="[0-9]*"
         value={value}
         onChange={handleChange}
         disabled={disabled}
-        min={min}
-        max={max}
         className={cn(
-          'text-center font-bold rounded-lg border-2 border-border bg-background',
-          'focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none',
+          'text-center font-bold rounded-xl',
+          'bg-background border-2 border-border',
           'transition-all duration-200',
+          'focus:border-primary focus:ring-4 focus:ring-primary/10 focus:outline-none',
           'disabled:opacity-50 disabled:cursor-not-allowed',
-          sizes[size].input
+          sizeConfig.input
         )}
       />
-      
+
       <button
         type="button"
         onClick={handleIncrement}
         disabled={disabled || value >= max}
-        className={cn('numeric-btn', sizes[size].btn)}
+        className={cn(
+          'flex items-center justify-center rounded-xl',
+          'bg-secondary text-secondary-foreground border border-border/50',
+          'transition-all duration-200',
+          'hover:bg-primary hover:text-primary-foreground hover:border-primary hover:shadow-md',
+          'active:scale-95',
+          'disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-secondary disabled:hover:text-secondary-foreground disabled:hover:border-border/50',
+          sizeConfig.btn
+        )}
         aria-label="Augmenter"
       >
-        <Plus className="w-5 h-5" />
+        <Plus className={sizeConfig.icon} />
       </button>
     </div>
   );
