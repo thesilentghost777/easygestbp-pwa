@@ -16,20 +16,37 @@ export default defineConfig(({ mode }) => ({
       registerType: "autoUpdate",
       // SUPPRIMEZ includeAssets pour éviter doublons
       manifest: {
-        name: "EasyGest BP",
-        short_name: "EasyGest",
-        description: "Gestion de boulangerie-pâtisserie offline-first",
-        theme_color: "#D4A574",
-        background_color: "#FDF8F3",
-        display: "standalone",
-        orientation: "portrait-primary",  // ✅ CORRIGÉ
-        scope: "/",
-        start_url: "/",
-        icons: [
-            { src: "/icon.png", sizes: "512x512", type: "image/png" },
-            { src: "/icon.png", sizes: "512x512", type: "image/png", purpose: "maskable" },
-        ],
-      },
+  name: "EasyGest BP",
+  short_name: "EasyGest",
+  description: "Gestion de boulangerie-pâtisserie offline-first",
+  theme_color: "#D4A574",
+  background_color: "#FDF8F3",
+  display: "standalone",
+  orientation: "portrait-primary",
+  scope: "/",
+  start_url: "/",
+  icons: [
+    { src: "/icon.png", sizes: "512x512", type: "image/png" },
+    { src: "/icon.png", sizes: "512x512", type: "image/png", purpose: "maskable" },
+  ],
+  // ✅ AJOUTEZ CETTE SECTION
+  screenshots: [
+    {
+      src: "/screenshot-mobile.png",
+      sizes: "540x720",
+      type: "image/png",
+      form_factor: "narrow",
+      label: "EasyGest BP - Vue mobile"
+    },
+    {
+      src: "/screenshot-desktop.png",
+      sizes: "1280x720",
+      type: "image/png",
+      form_factor: "wide",
+      label: "EasyGest BP - Vue desktop"
+    }
+  ]
+},
       workbox: {
         globPatterns: ["**/*.{js,css,html,png,svg,woff2}"],
         runtimeCaching: [
