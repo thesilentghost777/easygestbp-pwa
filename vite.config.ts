@@ -28,11 +28,10 @@ export default defineConfig(({ mode }) => ({
         icons: [
             { src: "/icon.png", sizes: "512x512", type: "image/png" },
             { src: "/icon.png", sizes: "512x512", type: "image/png", purpose: "maskable" },
-            { src: "/favicon.ico", sizes: "any", type: "image/x-icon" }
         ],
       },
       workbox: {
-        globPatterns: ["**/*.{js,css,html,ico,png,svg,woff2}"],
+        globPatterns: ["**/*.{js,css,html,png,svg,woff2}"],
         runtimeCaching: [
           {
             urlPattern: /^https:\/\/fonts\.googleapis\.com\/.*/i,
