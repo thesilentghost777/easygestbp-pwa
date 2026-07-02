@@ -1,0 +1,39 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+*.local
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Fichiers lourds / binaires à ne jamais commiter
+node_portable/
+dev-dist/
+*.rar
+*.zip
+*.7z
+*.exe
+*.dll
+*.msi
+electron/dist/
+electron/build/
+ios/App/App/Assets.xcassets/
+*.ipa
+*.apk
